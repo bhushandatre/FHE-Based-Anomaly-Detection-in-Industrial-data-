@@ -1,0 +1,649 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HE Pipeline Monitor</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.6.1/socket.io.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', Arial, sans-serif;
+      background: #0f1117;
+      color: #e0e0e0;
+      min-height: 100vh;
+    }
+
+    /* ── Header ─────────────────────────────── */
+    .header {
+      background: #1a1d2e;
+      border-bottom: 2px solid #2d3561;
+      padding: 14px 28px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .header h1 { font-size: 18px; color: #7c9ef8; font-weight: 700; }
+    .badge {
+      font-size: 11px; padding: 4px 10px; border-radius: 20px; font-weight: 600;
+    }
+    .badge.online  { background:#1a3a2a; color:#4caf50; border:1px solid #4caf50; }
+    .badge.offline { background:#3a1a1a; color:#f44336; border:1px solid #f44336; }
+
+    /* ── Layout ─────────────────────────────── */
+    .container { padding: 20px 28px; display: grid; gap: 18px; }
+    .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+    .row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 18px; }
+
+    /* ── Cards ──────────────────────────────── */
+    .card {
+      background: #1a1d2e; border: 1px solid #2d3561;
+      border-radius: 12px; padding: 18px;
+    }
+    .card h2 {
+      font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
+      color: #7c9ef8; margin-bottom: 14px; font-weight: 600;
+    }
+
+    /* ── CONTROL PANEL ──────────────────────── */
+    .control-panel {
+      background: #1a1d2e; border: 2px solid #2d3561;
+      border-radius: 12px; padding: 20px;
+    }
+    .control-panel h2 {
+      font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
+      color: #7c9ef8; margin-bottom: 16px; font-weight: 600;
+    }
+
+    .controls-row {
+      display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+    }
+
+    /* Buttons */
+    .btn {
+      padding: 10px 22px; border-radius: 8px; border: none;
+      font-size: 13px; font-weight: 600; cursor: pointer;
+      transition: all 0.15s; white-space: nowrap;
+    }
+    .btn:disabled {
+      opacity: 0.35; cursor: not-allowed;
+    }
+    .btn-primary {
+      background: #7c9ef8; color: #0f1117;
+    }
+    .btn-primary:hover:not(:disabled) { background: #9cb4ff; }
+
+    .btn-warning {
+      background: #ffa726; color: #0f1117;
+    }
+    .btn-warning:hover:not(:disabled) { background: #ffb74d; }
+
+    .btn-danger {
+      background: #f44336; color: #fff;
+    }
+    .btn-danger:hover:not(:disabled) { background: #ef5350; }
+
+    .btn-sad {
+      background: #29b6f6; color: #0f1117;
+    }
+    .btn-sad:hover:not(:disabled) { background: #4fc3f7; }
+
+    .btn-pca {
+      background: #66bb6a; color: #0f1117;
+    }
+    .btn-pca:hover:not(:disabled) { background: #81c784; }
+
+    .btn-reset {
+      background: #555; color: #eee;
+    }
+    .btn-reset:hover:not(:disabled) { background: #777; }
+
+    .divider {
+      width: 1px; height: 36px; background: #2d3561; margin: 0 4px;
+    }
+
+    /* Progress bar */
+    .progress-wrap {
+      margin-top: 14px;
+    }
+    .progress-label {
+      font-size: 12px; color: #aaa; margin-bottom: 6px;
+      display: flex; justify-content: space-between;
+    }
+    .progress-bar-bg {
+      background: #0f1117; border-radius: 6px;
+      height: 10px; overflow: hidden; border: 1px solid #2d3561;
+    }
+    .progress-bar-fill {
+      height: 100%; border-radius: 6px;
+      background: linear-gradient(90deg, #7c9ef8, #29b6f6);
+      transition: width 0.4s;
+    }
+
+    /* Status message */
+    .status-msg {
+      margin-top: 10px; font-size: 13px; color: #aaa;
+      min-height: 20px;
+    }
+    .status-msg.ok     { color: #4caf50; }
+    .status-msg.error  { color: #f44336; }
+    .status-msg.running{ color: #29b6f6; }
+
+    /* ── Log console ─────────────────────────── */
+    .log-console {
+      background: #0a0c14; border: 1px solid #2d3561; border-radius: 8px;
+      padding: 10px 14px; height: 140px; overflow-y: auto;
+      font-family: 'Courier New', monospace; font-size: 11px; color: #7c9ef8;
+    }
+    .log-line { margin-bottom: 3px; }
+    .log-line.err { color: #f44336; }
+    .log-line.ok  { color: #4caf50; }
+
+    /* ── Metrics ─────────────────────────────── */
+    .metrics-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .metric-box {
+      background: #0f1117; border: 1px solid #2d3561;
+      border-radius: 8px; padding: 12px; text-align: center;
+    }
+    .metric-label { font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 1px; }
+    .metric-value { font-size: 24px; font-weight: 700; color: #7c9ef8; margin: 4px 0; }
+
+    /* ── Round list ──────────────────────────── */
+    .round-list { list-style: none; }
+    .round-item {
+      display: flex; align-items: center; gap: 8px;
+      padding: 7px 0; border-bottom: 1px solid #2d3561; font-size: 12px;
+    }
+    .round-item:last-child { border-bottom: none; }
+    .round-name { flex: 1; color: #ccc; }
+    .round-time { color: #7c9ef8; font-size: 11px; font-weight: 600; }
+
+    /* ── Chart containers ────────────────────── */
+    .chart-container { position: relative; height: 180px; }
+
+    /* ── Throughput ──────────────────────────── */
+    .throughput-big { font-size: 44px; font-weight: 800; color: #4caf50; text-align: center; padding: 10px; }
+    .throughput-unit { font-size: 12px; color: #888; text-align: center; }
+
+    /* ── Mode display ────────────────────────── */
+    .mode-big { font-size: 36px; font-weight: 800; color: #7c9ef8; text-align: center; padding: 8px; }
+
+    /* ── PCA card ────────────────────────────── */
+    .pca-k { font-size: 44px; font-weight: 800; color: #4caf50; text-align: center; }
+    .pca-var { font-size: 20px; font-weight: 700; color: #7c9ef8; text-align: center; margin-top: 6px; }
+
+    /* ── Confusion matrix ────────────────────── */
+    #cm-display { padding: 6px; }
+    .no-data { color: #555; font-size: 12px; text-align: center; padding: 30px 0; }
+  </style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="header">
+  <h1>🔐 HE Pipeline Monitor — SWaT</h1>
+  <span id="server-badge" class="badge offline">⬤ HE Server Offline</span>
+</div>
+
+<div class="container">
+
+  <!-- ═══════════════════════════════════════════════ -->
+  <!-- CONTROL PANEL                                   -->
+  <!-- ═══════════════════════════════════════════════ -->
+  <div class="control-panel">
+    <h2>Control Panel</h2>
+    <div class="controls-row">
+
+      <!-- Send Data button -->
+      <button class="btn btn-primary" id="btn-upload"
+              onclick="sendAction('action_upload')">
+        📤 Send Data
+      </button>
+
+      <!-- Pause / Resume -->
+      <button class="btn btn-warning" id="btn-pause"
+              onclick="sendAction('action_pause')" disabled>
+        ⏸ Pause
+      </button>
+
+      <!-- Stop -->
+      <button class="btn btn-danger" id="btn-stop"
+              onclick="sendAction('action_stop')" disabled>
+        ⏹ Stop
+      </button>
+
+      <div class="divider"></div>
+
+      <!-- Run SAD -->
+      <button class="btn btn-sad" id="btn-sad"
+              onclick="sendAction('action_run_algorithm', {algorithm:'SAD'})"
+              disabled>
+        ▶ Run SAD
+      </button>
+
+      <!-- Run PCA -->
+      <button class="btn btn-pca" id="btn-pca"
+              onclick="sendAction('action_run_algorithm', {algorithm:'PCA'})"
+              disabled>
+        ▶ Run PCA
+      </button>
+
+      <div class="divider"></div>
+
+      <!-- Reset -->
+      <button class="btn btn-reset" id="btn-reset"
+              onclick="sendAction('action_reset')">
+        ↺ Reset
+      </button>
+
+    </div>
+
+    <!-- Progress bar -->
+    <div class="progress-wrap">
+      <div class="progress-label">
+        <span>Upload progress</span>
+        <span id="pct-label">0%</span>
+      </div>
+      <div class="progress-bar-bg">
+        <div class="progress-bar-fill" id="progress-fill" style="width:0%"></div>
+      </div>
+    </div>
+
+    <div class="status-msg" id="status-msg">Ready — click Send Data to begin</div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════ -->
+  <!-- LOG + MODE + THROUGHPUT                         -->
+  <!-- ═══════════════════════════════════════════════ -->
+  <div class="row-3">
+
+    <!-- Log console -->
+    <div class="card" style="grid-column: span 2;">
+      <h2>Activity Log</h2>
+      <div class="log-console" id="log-console">
+        <div class="log-line">Waiting for actions...</div>
+      </div>
+    </div>
+
+    <!-- Mode + Status -->
+    <div class="card">
+      <h2>Mode</h2>
+      <div class="mode-big" id="mode-display">—</div>
+      <div style="font-size:11px; color:#666; text-align:center; margin-top:6px;"
+           id="mode-status">Idle</div>
+      <div style="font-size:11px; color:#555; text-align:center; margin-top:8px;">
+        Round <span id="round-num" style="color:#7c9ef8; font-weight:700;">0</span>
+        of <span id="round-total" style="color:#7c9ef8; font-weight:700;">9</span>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ═══════════════════════════════════════════════ -->
+  <!-- METRICS + THROUGHPUT + PCA                      -->
+  <!-- ═══════════════════════════════════════════════ -->
+  <div class="row-3">
+
+    <!-- Metrics -->
+    <div class="card">
+      <h2>Metrics</h2>
+      <div class="metrics-grid">
+        <div class="metric-box">
+          <div class="metric-label">AUC</div>
+          <div class="metric-value" id="m-auc">—</div>
+        </div>
+        <div class="metric-box">
+          <div class="metric-label">F1</div>
+          <div class="metric-value" id="m-f1">—</div>
+        </div>
+        <div class="metric-box">
+          <div class="metric-label">Precision</div>
+          <div class="metric-value" id="m-prec">—</div>
+        </div>
+        <div class="metric-box">
+          <div class="metric-label">Recall</div>
+          <div class="metric-value" id="m-rec">—</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Throughput -->
+    <div class="card">
+      <h2>Throughput</h2>
+      <div class="throughput-big" id="throughput-val">—</div>
+      <div class="throughput-unit">rows / second</div>
+      <div style="font-size:11px; color:#555; text-align:center; margin-top:8px;">
+        Total: <span id="total-time" style="color:#aaa;">—</span>
+      </div>
+    </div>
+
+    <!-- PCA Components (hidden until PCA mode) -->
+    <div class="card" id="pca-card" style="display:none;">
+      <h2>PCA Components</h2>
+      <div class="pca-k" id="pca-k">—</div>
+      <div style="font-size:11px; color:#888; text-align:center;">components selected</div>
+      <div class="pca-var" id="pca-var">—</div>
+      <div style="font-size:11px; color:#555; text-align:center;">variance explained</div>
+      <div style="font-size:10px; color:#444; text-align:center; margin-top:6px;">
+        Threshold: 90%
+      </div>
+    </div>
+
+    <!-- Placeholder when not PCA -->
+    <div class="card" id="no-pca-card">
+      <h2>Algorithm Info</h2>
+      <div class="no-data">Run SAD or PCA to see details</div>
+    </div>
+
+  </div>
+
+  <!-- ═══════════════════════════════════════════════ -->
+  <!-- ROUND LIST + LATENCY CHART                      -->
+  <!-- ═══════════════════════════════════════════════ -->
+  <div class="row-2">
+
+    <div class="card">
+      <h2>Protocol Rounds</h2>
+      <ul class="round-list" id="round-list">
+        <li class="round-item">
+          <span>⬜</span>
+          <span class="round-name">Waiting for protocol to start...</span>
+        </li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>Latency Per Round (ms)</h2>
+      <div class="chart-container">
+        <canvas id="latency-chart"></canvas>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ═══════════════════════════════════════════════ -->
+  <!-- SCORE DISTRIBUTION + CONFUSION MATRIX           -->
+  <!-- ═══════════════════════════════════════════════ -->
+  <div class="row-2">
+
+    <div class="card">
+      <h2>Score Distribution</h2>
+      <div class="chart-container">
+        <canvas id="score-chart"></canvas>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Confusion Matrix</h2>
+      <div id="cm-display" class="no-data">Waiting for results...</div>
+    </div>
+
+  </div>
+
+</div><!-- /container -->
+
+<script>
+const socket = io();
+
+// ── Charts ──────────────────────────────────────────────
+const latencyChart = new Chart(
+  document.getElementById('latency-chart').getContext('2d'), {
+  type: 'bar',
+  data: { labels: [], datasets: [{
+    label: 'ms', data: [],
+    backgroundColor: 'rgba(124,158,248,0.7)',
+    borderColor: 'rgba(124,158,248,1)',
+    borderWidth: 1, borderRadius: 4
+  }]},
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { ticks: { color:'#888', font:{size:9} }, grid:{color:'#2d3561'} },
+      y: { ticks: { color:'#888' }, grid:{color:'#2d3561'} }
+    }
+  }
+});
+
+const scoreChart = new Chart(
+  document.getElementById('score-chart').getContext('2d'), {
+  type: 'bar',
+  data: { labels: [], datasets: [
+    { label:'Normal', data:[], backgroundColor:'rgba(41,182,246,0.7)', borderRadius:2 },
+    { label:'Attack', data:[], backgroundColor:'rgba(244,67,54,0.7)',  borderRadius:2 }
+  ]},
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { labels: { color:'#aaa', font:{size:11} } } },
+    scales: {
+      x: { ticks:{color:'#888',font:{size:9}}, grid:{color:'#2d3561'} },
+      y: { ticks:{color:'#888'}, grid:{color:'#2d3561'} }
+    }
+  }
+});
+
+// ── Socket helpers ───────────────────────────────────────
+function sendAction(event, data={}) {
+  socket.emit(event, data);
+}
+
+// ── Log ─────────────────────────────────────────────────
+const logEl = document.getElementById('log-console');
+function addLog(msg, cls='') {
+  const d = document.createElement('div');
+  d.className = 'log-line ' + cls;
+  d.textContent = '[' + new Date().toLocaleTimeString() + '] ' + msg;
+  logEl.appendChild(d);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+// ── Button state machine ────────────────────────────────
+function applyButtons(phase, paused) {
+  const upload  = document.getElementById('btn-upload');
+  const pause   = document.getElementById('btn-pause');
+  const stop    = document.getElementById('btn-stop');
+  const sad     = document.getElementById('btn-sad');
+  const pca     = document.getElementById('btn-pca');
+
+  // Defaults — everything off
+  upload.disabled = true;
+  pause.disabled  = true;
+  stop.disabled   = true;
+  sad.disabled    = true;
+  pca.disabled    = true;
+
+  if (phase === 'idle' || phase === 'error') {
+    upload.disabled = false;
+  }
+  if (phase === 'uploading') {
+    pause.disabled = false;
+    stop.disabled  = false;
+    pause.textContent = paused ? '▶ Resume' : '⏸ Pause';
+  }
+  if (phase === 'uploaded') {
+    sad.disabled = false;
+    pca.disabled = false;
+    stop.disabled = false;
+  }
+  if (phase === 'running') {
+    // nothing — wait for done
+  }
+  if (phase === 'done') {
+    upload.disabled = false;
+    sad.disabled    = false;
+    pca.disabled    = false;
+  }
+}
+
+// ── Status message style ─────────────────────────────────
+function setStatusMsg(msg, phase) {
+  const el = document.getElementById('status-msg');
+  el.textContent = msg;
+  el.className = 'status-msg';
+  if (phase === 'error')     el.classList.add('error');
+  else if (phase === 'done') el.classList.add('ok');
+  else if (phase === 'running' || phase === 'uploading')
+                             el.classList.add('running');
+}
+
+// ── Client state update ──────────────────────────────────
+socket.on('client_state', data => {
+  document.getElementById('progress-fill').style.width = data.progress + '%';
+  document.getElementById('pct-label').textContent = data.progress + '%';
+  setStatusMsg(data.message, data.phase);
+  applyButtons(data.phase, data.paused);
+});
+
+// ── Log events ───────────────────────────────────────────
+socket.on('log', data => {
+  const cls = data.msg.startsWith('ERROR') ? 'err'
+            : data.msg.includes('✓')       ? 'ok' : '';
+  addLog(data.msg, cls);
+});
+
+// ── Server status updates ─────────────────────────────────
+const SAD_ROUNDS = {{ sad_rounds | tojson }};
+const PCA_ROUNDS = {{ pca_rounds | tojson }};
+
+socket.on('connect', () => {
+  document.getElementById('server-badge').className = 'badge online';
+  document.getElementById('server-badge').textContent = '⬤ Dashboard Connected';
+});
+
+socket.on('server_offline', () => {
+  document.getElementById('server-badge').className = 'badge offline';
+  document.getElementById('server-badge').textContent = '⬤ HE Server Offline';
+});
+
+socket.on('status_update', data => {
+  document.getElementById('server-badge').className = 'badge online';
+  document.getElementById('server-badge').textContent = '⬤ HE Server Online';
+
+  const mode = data.mode || '—';
+  document.getElementById('mode-display').textContent = mode;
+  document.getElementById('round-num').textContent = data.current_round || 0;
+
+  const statusMap = {
+    idle:'Idle', running:'Running...', computing_scores:'Computing scores...',
+    waiting_invert_N:'Waiting: invert N',
+    waiting_invert_sigma2:'Waiting: invert sigma²',
+    scores_ready:'Scores ready', complete:'Complete ✓'
+  };
+  document.getElementById('mode-status').textContent =
+    statusMap[data.status] || data.status || '';
+
+  if (data.mode && data.round_times) {
+    const rounds = data.mode === 'PCA' ? PCA_ROUNDS : SAD_ROUNDS;
+    document.getElementById('round-total').textContent = rounds.length;
+    updateRoundList(rounds, data.current_round, data.round_times);
+    updateLatencyChart(data.round_times);
+  }
+
+  if (data.total_time_sec) {
+    const tput = (2000 / data.total_time_sec).toFixed(1);
+    document.getElementById('throughput-val').textContent = tput;
+    document.getElementById('total-time').textContent = data.total_time_sec.toFixed(1) + 's';
+  }
+
+  // PCA component display
+  if (data.mode === 'PCA') {
+    document.getElementById('pca-card').style.display = 'block';
+    document.getElementById('no-pca-card').style.display = 'none';
+    if (data.pca_n_components) {
+      document.getElementById('pca-k').textContent = data.pca_n_components;
+      document.getElementById('pca-var').textContent = data.pca_variance_pct + '%';
+    }
+  } else {
+    document.getElementById('pca-card').style.display = 'none';
+    document.getElementById('no-pca-card').style.display = 'block';
+  }
+});
+
+socket.on('results_update', data => {
+  if (data.metrics) {
+    document.getElementById('m-auc').textContent  = data.metrics.roc_auc?.toFixed(4) || '—';
+    document.getElementById('m-f1').textContent   = data.metrics.f1?.toFixed(4)      || '—';
+    document.getElementById('m-prec').textContent = data.metrics.precision?.toFixed(4)|| '—';
+    document.getElementById('m-rec').textContent  = data.metrics.recall?.toFixed(4)  || '—';
+  }
+  if (data.confusion_matrix) renderCM(data.confusion_matrix);
+  if (data.scores && data.labels) {
+    const normals = data.scores.filter((_,i) => data.labels[i] === 0);
+    const attacks = data.scores.filter((_,i) => data.labels[i] === 1);
+    renderScoreHist(normals, attacks);
+  }
+});
+
+// ── Round list ────────────────────────────────────────────
+function updateRoundList(rounds, current, times) {
+  const ul = document.getElementById('round-list');
+  ul.innerHTML = '';
+  rounds.forEach((name, idx) => {
+    const li = document.createElement('li');
+    li.className = 'round-item';
+    const icon = idx < current - 1 ? '✅' : idx === current - 1 ? '⏳' : '⬜';
+    const t    = times[name] ? `${Math.round(times[name])}ms` : '';
+    li.innerHTML = `<span>${icon}</span>
+                    <span class="round-name">${name}</span>
+                    <span class="round-time">${t}</span>`;
+    ul.appendChild(li);
+  });
+}
+
+// ── Latency chart ─────────────────────────────────────────
+function updateLatencyChart(times) {
+  const labels = Object.keys(times).map(k => k.split('—')[0].trim());
+  const vals   = Object.values(times);
+  latencyChart.data.labels   = labels;
+  latencyChart.data.datasets[0].data = vals;
+  latencyChart.update();
+}
+
+// ── Score histogram ───────────────────────────────────────
+function renderScoreHist(normals, attacks) {
+  const all = [...normals, ...attacks];
+  if (!all.length) return;
+  const mn = Math.min(...all), mx = Math.max(...all);
+  const bins = 25, step = (mx - mn) / bins || 1;
+  const labels = Array.from({length: bins}, (_, i) => (mn + i*step).toFixed(3));
+  function bin(arr) {
+    const c = new Array(bins).fill(0);
+    arr.forEach(v => { c[Math.min(Math.floor((v-mn)/step), bins-1)]++; });
+    return c;
+  }
+  scoreChart.data.labels = labels;
+  scoreChart.data.datasets[0].data = bin(normals);
+  scoreChart.data.datasets[1].data = bin(attacks);
+  scoreChart.update();
+}
+
+// ── Confusion matrix ──────────────────────────────────────
+function renderCM(cm) {
+  document.getElementById('cm-display').innerHTML = `
+    <table style="width:100%;border-collapse:collapse;font-size:13px;text-align:center;">
+      <tr>
+        <td></td>
+        <td style="color:#888;font-size:10px;padding:6px;">Pred Normal</td>
+        <td style="color:#888;font-size:10px;padding:6px;">Pred Attack</td>
+      </tr>
+      <tr>
+        <td style="color:#888;font-size:10px;padding:6px;">True Normal</td>
+        <td style="padding:12px;background:#1a3a4a;color:#29b6f6;font-size:20px;font-weight:700;border-radius:4px;">${cm.TN}</td>
+        <td style="padding:12px;background:#3a2d1a;color:#ffa726;font-size:20px;font-weight:700;border-radius:4px;">${cm.FP}</td>
+      </tr>
+      <tr>
+        <td style="color:#888;font-size:10px;padding:6px;">True Attack</td>
+        <td style="padding:12px;background:#3a1a1a;color:#f44336;font-size:20px;font-weight:700;border-radius:4px;">${cm.FN}</td>
+        <td style="padding:12px;background:#1a3a2a;color:#4caf50;font-size:20px;font-weight:700;border-radius:4px;">${cm.TP}</td>
+      </tr>
+    </table>
+    <div style="font-size:10px;color:#555;margin-top:8px;display:flex;justify-content:space-around;">
+      <span>TN=${cm.TN}</span><span>FP=${cm.FP}</span>
+      <span>FN=${cm.FN}</span><span>TP=${cm.TP}</span>
+    </div>`;
+}
+</script>
+</body>
+</html>
