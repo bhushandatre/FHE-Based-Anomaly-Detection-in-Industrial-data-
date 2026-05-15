@@ -1,0 +1,145 @@
+
+\documentclass[11pt, a4paper, twoside]{Thesis}
+\usepackage[T1]{fontenc}
+\usepackage{needspace}
+\usepackage[utf8]{inputenc}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{siunitx}
+\usepackage[square, numbers, comma, sort&compress]{natbib}
+\usepackage{tabularx,lettrine,multicol,ltablex,supertabular,latexsym}
+\usepackage{amssymb,setspace,amsmath,pdflscape,url}
+\usepackage{multirow,threeparttable,graphics,epsfig,epstopdf,graphicx}
+\usepackage{array,longtable,rotfloat,textcomp,subcaption}
+\usepackage[american]{babel}
+\usepackage{comment,morefloats,verbatim,mathastext,changepage,floatpag}
+\usepackage{caption,booktabs,listings,xcolor,algorithm,algpseudocode}
+
+
+\definecolor{codeblue}{RGB}{0,0,180}
+\definecolor{codegreen}{RGB}{0,128,0}
+\definecolor{codegray}{RGB}{128,128,128}
+\definecolor{codebg}{RGB}{248,248,248}
+\lstdefinestyle{pycode}{
+  backgroundcolor=\color{codebg}, commentstyle=\color{codegreen},
+  keywordstyle=\color{codeblue}, basicstyle=\ttfamily\small,
+  breaklines=true, keepspaces=true, showstringspaces=false,
+  tabsize=2, frame=single, rulecolor=\color{codegray},
+  numbers=left, numberstyle=\tiny\color{codegray}, numbersep=5pt
+}
+\lstset{style=pycode}
+\hypersetup{urlcolor=black, colorlinks=true}
+\title{\ttitle}
+
+\makeatletter
+\renewcommand{\sfdefault}{lmss}
+\providecommand{\tabularnewline}{\\}
+\makeatother
+
+\begin{document}
+\frontmatter
+\setstretch{1.3}
+\fancyhead{}\rhead{\thepage}\lhead{}
+\pagestyle{fancy}
+\newcommand{\HRule}{\rule{\linewidth}{0.5mm}}
+
+%-- Thesis Details ----------------------------------
+\newcommand{\thesisTitle}{Privacy-Preserving Anomaly Detection on Encrypted Data Using Homomorphic Encryption}
+\newcommand{\authorName}{Bhushan Datre}
+\newcommand{\enrollmentNumber}{2024CSM1004}
+\newcommand{\supervisorTitle}{Dr.}
+\newcommand{\supervisorName}{Manish Kumar}
+\newcommand{\degreeName}{Master of Technology}
+\newcommand{\deptName}{Department of Computer Science \& Engineering}
+
+%-- Title Page --------------------------------------
+\begin{titlepage}\begin{center}
+{\bfseries\fontsize{18}{22}\selectfont\thesisTitle}\\[1.5cm]
+\large\textbf{A Thesis Submitted}\\
+\textbf{in Partial Fulfillment of the Requirements}\\
+\textbf{for the Degree of}\\[0.3cm]
+\textbf{\expandafter\uppercase\expandafter{\degreeName}}\\[0.8cm]
+\textbf{By}\\[0.5cm]
+\textbf{\expandafter\uppercase\expandafter{\authorName}}\\[0.2cm]
+\textbf{Enrollment No.: \enrollmentNumber}\\[1.0cm]
+\textbf{Under the Supervision of}\\[0.3cm]
+\textbf{\supervisorTitle\ \expandafter\uppercase\expandafter{\supervisorName}}\\[1.8cm]
+\includegraphics[scale=0.5]{Images/IITRopar_logo.jpg}\\[2.0cm]
+\large\textbf{\deptName}\\
+\textbf{Indian Institute of Technology Ropar}\\
+\textbf{\today}
+\end{center}\end{titlepage}
+\setstretch{1}
+
+%-- Declaration -------------------------------------
+\clearpage\pagestyle{empty}
+\begin{titlepage}
+\begin{center}\textsc{\textbf{\fontsize{28}{30}\selectfont{Declaration}}}\\[2.0cm]\end{center}
+This is to certify that the thesis entitled ``\textbf{\thesisTitle}'', submitted by me to the \textit{Indian Institute of Technology Ropar} for the award of the degree of \degreeName, is a bonafide work carried out by me under the supervision of \supervisorTitle\ \supervisorName. The content of this thesis, in full or in parts, has not been submitted to any other University or Institute for the award of any degree or diploma. I also wish to state that to the best of my knowledge nothing in this report amounts to plagiarism.
+\vspace{3cm}\\
+Sign:\\ \rule[1em]{25em}{0.5pt}\\[0.1cm]
+\textbf{\authorName}\\
+\textbf{\deptName,}\\
+\textbf{Indian Institute of Technology Ropar,}\\
+\textbf{Rupnagar-140001, Punjab, India.}\\[2cm]
+\hfill{}Date:\\ \rule[1em]{25em}{0.5pt}
+\end{titlepage}
+
+%-- Certificate -------------------------------------
+\clearpage\pagestyle{empty}
+\begin{titlepage}
+\begin{center}\textsc{\textbf{\fontsize{28}{30}\selectfont{Certificate}}}\\[2.0cm]\end{center}
+This is to certify that the thesis entitled ``\textbf{\thesisTitle}'', submitted by \textbf{\authorName} (\enrollmentNumber), a master's student in the \textit{\deptName}, \textit{Indian Institute of Technology Ropar}, for the award of the degree of \degreeName, is a record of original research work carried out by the candidate under my supervision and guidance. The thesis has fulfilled all requirements as per the regulations of the institute and in my opinion has reached the standard worthy of the award of the degree. The results embodied in this thesis have not been submitted to any other University or Institute.
+\vspace{3cm}\\
+Sign:\\ \rule[1em]{25em}{0.5pt}\\[0.1cm]
+\textbf{Supervisor: \supervisorTitle\ \supervisorName}\\
+\textbf{\deptName,}\\
+\textbf{Indian Institute of Technology Ropar,}\\
+\textbf{Rupnagar-140001, Punjab, India.}\\[2cm]
+\hfill{}Date:\\ \rule[1em]{25em}{0.5pt}
+\end{titlepage}
+
+%-- Acknowledgements --------------------------------
+\begin{titlepage}
+\begin{center}\textsc{\textbf{\fontsize{28}{30}\selectfont{Acknowledgements}}}\\[1.0cm]\end{center}
+\input{Closet/Acknowledgments}
+\end{titlepage}
+
+%-- Abstract ----------------------------------------
+\setstretch{1.5}
+\begin{titlepage}
+\begin{center}\textsc{\textbf{\fontsize{28}{30}\selectfont{Abstract}}}\\[1.0cm]\end{center}
+\input{Closet/Abstract}
+\end{titlepage}
+\cleardoublepage\setstretch{1}
+
+%-- TOC / LOF / LOT ---------------------------------
+\pagestyle{fancy}
+\lhead{\emph{Contents}}\tableofcontents
+\lhead{\emph{List of Figures}}\listoffigures
+\lhead{\emph{List of Tables}}\listoftables
+
+%-- Chapters ----------------------------------------
+\mainmatter\pagestyle{fancy}
+
+
+
+\input{Chapters/Chapter01/Chapter01}
+\input{Chapters/Chapter02/Chapter02}
+\input{Chapters/Chapter03/Chapter03}
+\input{Chapters/Chapter04/Chapter04}
+\input{Chapters/Chapter05/Chapter05}
+\input{Chapters/Chapter06/Chapter06}
+
+%-- Bibliography ------------------------------------
+\addtocontents{toc}{\vspace{2em}}
+\backmatter
+\cleardoublepage
+\addtocontents{toc}{\vspace{1em}}
+\clearpage\label{Bibliography}
+\lhead{\emph{Bibliography}}
+\setstretch{1}
+\bibliographystyle{Bibliography/IEEEtran}
+\bibliography{Bibliography/Bibliography}
+
+\end{document}

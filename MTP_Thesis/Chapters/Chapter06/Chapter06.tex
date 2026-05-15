@@ -1,0 +1,287 @@
+\chapter{Conclusion and Future Work}
+\chaptermark{Conclusion and Future Work}
+\HRule\\[2cm]
+\label{Chapter6}
+\lhead{\emph{\textbf{Chapter 6:} Conclusion and Future Work}}
+
+\begin{spacing}{1.6}
+
+\section{Summary of Work}
+
+This thesis addressed the fundamental conflict between cloud-based anomaly
+detection utility and data privacy: the server must see the data to detect
+anomalies, yet the data is too sensitive to share. The proposed resolution is
+a complete Privacy-Preserving Anomaly Detection framework built on CKKS
+Homomorphic Encryption, which enables the detection server to compute anomaly
+scores directly on ciphertexts without accessing any plaintext data.
+
+The work spans five major contributions:
+
+\subsection{FHE Library Selection}
+
+A systematic four-experiment benchmarking study of Microsoft SEAL, IBM HElib,
+and Pyfhel characterized the performance properties relevant to anomaly
+detection workloads: ciphertext multiplication latency, rotation latency,
+maximum multiplication depth, and noise budget evolution. The study identified
+SEAL as the most performant library for real-valued ML computation, achieving
+the deepest multiplication budget (depth 32 at polynomial degree 32768), the
+most consistent HEXL hardware acceleration (15--45\% improvement), and the
+best arithmetic performance for the ct$\times$pt operations that dominate
+anomaly scoring computation.
+
+The benchmarking also established the fundamental asymmetry between addition
+and multiplication in HE: addition consumes negligible noise budget (enabling
+over 1,048,576 successive additions), while each multiplication consumes
+approximately $1/L$ of the remaining budget. This finding directly motivates
+the algorithm design principle: every multiplication must be justified, while
+rotations and additions are essentially free.
+
+\subsection{Dataset-Agnostic Preprocessing Pipeline}
+
+A five-stage preprocessing pipeline converts raw multivariate data from any
+domain to CKKS-encrypted form. The pipeline handles continuous and binary
+feature types with type-appropriate CKKS-compatible normalization, enforces
+strict separation of normalization parameters from anomaly data, applies
+SIMD-optimized column-major and row-major encoding strategies that minimize
+HE depth consumption and noise accumulation, and verifies output integrity
+through five automated checks. The pipeline was successfully applied to two
+benchmark datasets --- SWaT (51 features) and BATADAL (43 features) ---
+demonstrating dataset generality.
+
+\subsection{Multi-Round Interactive Protocol for Exact Encrypted Division}
+
+The central technical contribution of this thesis is the multi-round interactive
+protocol that resolves the encrypted division problem --- the primary obstacle
+in implementing anomaly detection algorithms under CKKS. The protocol routes
+the encrypted denominator through the key-holding data owner for exact plaintext
+inversion and re-encryption, achieving zero approximation error at zero
+additional HE depth cost.
+
+Two alternative approaches --- Newton-Raphson iterative inversion and Chebyshev
+polynomial approximation --- were systematically evaluated and shown to be
+unviable. Newton-Raphson diverges because the $37\times$ range of feature
+variances in real-world data prevents a single initial guess from satisfying
+the convergence condition for all SIMD slots simultaneously. Chebyshev
+approximation produces unacceptable 33\% error at degree 3 and scale overflow
+at higher degrees. The multi-round protocol is the only approach that achieves
+exact division, and its privacy guarantee is preserved because only aggregate
+model statistics (not individual data points) are revealed to the data owner
+during inversion rounds.
+
+\subsection{HE-SAD and HE-PCA Implementations}
+
+Two complete CKKS implementations of unsupervised anomaly detection were
+developed and evaluated:
+
+\textbf{HE-SAD} implements variance-normalized Mahalanobis distance scoring
+through a 9-round protocol. The per-row computation consumes only 2 of 5
+available HE multiplication levels: one for squaring and one for variance
+normalization. Six rotations implement the feature slot sum. HE-SAD achieves
+AUC $= 0.9533$ on SWaT, matching the plaintext baseline of $0.929$ and
+demonstrating that no fundamental accuracy penalty results from privacy-preserving
+encryption.
+
+\textbf{HE-PCA} implements PCA reconstruction error scoring through an 8-round
+protocol. The per-row computation consumes 3 of 5 levels: one for projection
+onto each component, one for reconstruction, and one for the squared residual
+norm. Optimal component selection ($k^*$ explaining at least 90\% of training
+variance) is performed automatically by the server. A slight AUC reduction
+compared to the plaintext PCA baseline is observed, attributable to CKKS
+approximation noise accumulating across the $k^*$ component projection
+operations.
+
+\subsection{Network Deployment and Live Monitoring}
+
+The complete system is deployed as a three-process network application:
+
+\begin{itemize}
+  \item A \textbf{FastAPI detection server} (14 REST endpoints) that receives
+  encrypted ciphertexts, performs all HE computation, and computes scores
+  asynchronously in a background thread.
+  \item A \textbf{data owner client} embedded in the monitoring dashboard,
+  handling encryption, inversion rounds, score decryption, and classification.
+  \item A \textbf{live SocketIO monitoring dashboard} with browser-based
+  controls (Send Data, Pause, Stop, Run SAD, Run PCA, Reset) eliminating the
+  need for a separate client terminal.
+\end{itemize}
+
+The deployment addresses practical engineering challenges including batched
+ciphertext transfer (100 ciphertexts per HTTP request to avoid socket buffer
+overflow), asynchronous score computation with client polling, and real-time
+monitoring of round progress, per-round latency, score distributions, and
+classification metrics.
+
+\section{Key Findings}
+
+\textbf{Finding 1: Exact encrypted division is achievable without approximation
+error.}
+The multi-round interactive protocol demonstrates that HE-based ML algorithms
+requiring division can be implemented exactly by routing aggregate parameter
+inversion through the key-holding data owner. This is superior in every
+quantified dimension to Newton-Raphson (diverges) and Chebyshev approximation
+(33\% error or scale overflow).
+
+\textbf{Finding 2: No fundamental accuracy penalty from encryption for SAD.}
+HE-SAD achieves AUC $= 0.9533$ versus plaintext AUC $= 0.929$ on SWaT. The
+multi-round protocol's exact division preserves the full discriminative power
+of variance-normalized anomaly scoring under CKKS encryption. The slight AUC
+improvement over the plaintext baseline is within test set variability and
+does not indicate a systematic advantage.
+
+\textbf{Finding 3: CKKS approximation noise accumulation is algorithm-specific.}
+HE-SAD shows no accuracy loss while HE-PCA shows a slight reduction. This
+difference reflects the number of multiply-plain + rescale operations per row:
+SAD requires 2 (one squaring, one normalization), while PCA requires $2k^* + 1$
+(two per component plus one for the final squaring). The accumulated $10^{-9}$
+approximation error per operation becomes measurable in the score distribution
+when dozens of operations are chained.
+
+\textbf{Finding 4: Depth efficiency enables practical leveled HE without
+bootstrapping.}
+By designing SAD to use 2 levels and PCA to use 3 levels per row, both
+algorithms fit comfortably within a 5-level budget at degree 16384, with no
+bootstrapping required. This makes the system practical with current SEAL
+parameter settings and hardware.
+
+\textbf{Finding 5: PCA's advantage on BATADAL motivates HE-PCA for correlated
+attacks.}
+On BATADAL, where attacks preserve individual sensor statistics while disrupting
+cross-sensor correlations, PCA (F1 $= 0.402$) substantially outperforms SAD
+(F1 $= 0.256$). This demonstrates that HE-PCA addresses a qualitatively
+different and harder class of anomalies than HE-SAD, and that both algorithms
+are needed for a comprehensive privacy-preserving detection framework.
+
+\textbf{Finding 6: Network transport, not HE computation, dominates latency.}
+Test data upload accounts for approximately 74\% of total protocol latency
+(35 of 47 seconds) due to the large ciphertext size (1 MB each). Pure HE
+computation rounds total approximately 6--7 seconds. Cloud deployment over a
+dedicated high-bandwidth network would eliminate the transport bottleneck,
+making total protocol latency competitive with plaintext detection systems.
+
+\section{Limitations}
+
+\begin{enumerate}
+  \item \textbf{HE-PCA accuracy loss.}
+  Across the $k^*$ component projections, CKKS approximation noise accumulates
+  and causes a measurable AUC reduction compared to the plaintext PCA baseline.
+  Bootstrapping (supported by HElib but not the current SEAL configuration)
+  would refresh the noise budget to enable deeper circuits and potentially
+  recover accuracy.
+
+  \item \textbf{No bootstrapping.}
+  The leveled HE configuration supports a fixed number of multiplications per
+  ciphertext chain. Algorithms requiring more than 5 levels per row --- such
+  as multi-layer neural network inference --- cannot be implemented without
+  bootstrapping.
+
+  \item \textbf{Localhost evaluation.}
+  All latency measurements were made with client and server on the same machine.
+  Real network deployment introduces additional transport latency depending on
+  bandwidth, round-trip time, and geographic separation. While the architecture
+  is cloud-ready (changing \texttt{SERVER\_HOST} in configuration suffices),
+  the performance characterisation is limited to localhost.
+
+  \item \textbf{Binary classification only.}
+  The system outputs a binary Normal/Anomalous decision. Multi-class anomaly
+  categorization (identifying the type or severity of anomaly) would require
+  labeled training data and fundamentally different algorithms.
+
+  \item \textbf{BATADAL HE evaluation pending.}
+  The preprocessing pipeline successfully processed BATADAL (43 features,
+  8761 normal training rows), and the framework is configured to evaluate it
+  with a 3-line configuration change. Full end-to-end HE evaluation on BATADAL
+  was not completed within the scope of this thesis.
+
+  \item \textbf{Honest-but-curious adversary model.}
+  The system provides strong privacy guarantees against an honest-but-curious
+  server. Protection against a malicious server that deviates from the protocol
+  (e.g., by returning incorrect ciphertexts) requires additional verifiability
+  mechanisms not included in this work.
+\end{enumerate}
+
+\section{Future Work}
+
+\begin{enumerate}
+  \item \textbf{Reduce HE-PCA accuracy loss.}
+  Investigate higher-precision CKKS configurations (larger polynomial modulus
+  degree, more primes per level), noise-aware component selection strategies
+  (fewer components to reduce accumulated error), or component-wise bootstrapping
+  to recover plaintext PCA accuracy in the encrypted setting.
+
+  \item \textbf{Complete BATADAL HE evaluation.}
+  Apply both HE-SAD and HE-PCA to BATADAL using the existing framework
+  infrastructure. Given PCA's advantage on BATADAL in plaintext, HE-PCA
+  evaluation is particularly important to characterise privacy-preserving
+  detection of coordinated anomalies.
+
+  \item \textbf{Cloud deployment and latency profiling.}
+  Deploy the detection server on cloud infrastructure (AWS EC2 or GCP Compute
+  Engine) and measure real network latency for each protocol round across
+  different network conditions and geographic separations.
+
+  \item \textbf{ROC-based threshold optimization.}
+  Replace the fixed three-sigma threshold rule with ROC-curve-based optimization
+  to maximize F1 score or a user-specified precision-recall operating point.
+
+  \item \textbf{Streaming anomaly detection.}
+  Extend from batch mode (encrypting all test observations before scoring)
+  to streaming mode (scoring each new observation as it arrives). This requires
+  incremental update protocols for the mean and variance under encryption.
+
+  \item \textbf{Bootstrapping for deeper circuits.}
+  Integrate HElib bootstrapping to support more complex detection algorithms
+  --- including shallow neural network autoencoders --- that require more than
+  5 HE multiplication levels per inference.
+
+  \item \textbf{Federated privacy-preserving detection.}
+  Extend to the federated setting where multiple data owners contribute
+  encrypted training data to a shared anomaly detection model without exposing
+  their data to each other or to the server. This requires secure aggregation
+  protocols for the mean and covariance computation steps.
+
+  \item \textbf{Verifiable computation.}
+  Add zero-knowledge proof mechanisms to verify that the server performed the
+  correct HE computations, extending the privacy guarantee from honest-but-
+  curious to malicious adversaries.
+
+  \item \textbf{Application to additional domains.}
+  Evaluate the framework on healthcare (patient physiological monitoring),
+  financial (credit card transaction fraud), and network security (intrusion
+  detection) datasets to demonstrate that the privacy-preserving detection
+  capability generalizes beyond the water infrastructure benchmarks used in
+  this thesis.
+\end{enumerate}
+
+\section{Conclusion}
+
+This thesis demonstrates that high-quality, unsupervised anomaly detection on
+sensitive data is achievable under full homomorphic encryption, with no
+fundamental accuracy penalty compared to plaintext detection. The work makes
+a concrete contribution at each layer of the privacy-preserving detection
+stack: from FHE library selection and dataset preprocessing, through the
+central technical innovation of exact encrypted division via the multi-round
+interactive protocol, to complete HE implementations of two anomaly detection
+algorithms, and finally to a deployed network system with real-time monitoring.
+
+The multi-round interactive protocol is the defining technical contribution.
+It demonstrates that the encrypted division problem --- which blocks the
+straightforward application of HE to most anomaly detection algorithms ---
+can be resolved exactly and efficiently by using the data owner as a trusted
+computation agent for aggregate parameter inversion. This insight is general
+and applicable beyond the specific algorithms and datasets considered in this
+thesis.
+
+HE-SAD achieves AUC $= 0.9533$ on the SWaT benchmark, surpassing the plaintext
+baseline of $0.929$. The detection server computed all anomaly scores directly
+on CKKS ciphertexts without accessing any plaintext sensor value. The data
+owner's secret key never left the client, and no individual measurement was
+exposed to the server at any protocol step.
+
+The results establish that privacy-preserving anomaly detection is not merely
+theoretically feasible but practically achievable with current homomorphic
+encryption technology. The data owner retains complete data sovereignty; the
+detection server gains no knowledge of individual measurements; and detection
+accuracy is preserved. This resolves the fundamental conflict between anomaly
+detection utility and data privacy that motivated this work.
+
+\end{spacing}

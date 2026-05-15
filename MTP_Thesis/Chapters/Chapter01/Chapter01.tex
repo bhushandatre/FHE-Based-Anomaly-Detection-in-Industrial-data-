@@ -1,0 +1,277 @@
+\chapter{Introduction}
+\chaptermark{Introduction}
+\HRule\\[2cm]
+\label{Chapter1}
+\lhead{\emph{\textbf{Chapter 1:} Introduction}}
+
+\begin{spacing}{1.6}
+
+\section{Background and Motivation}
+
+The proliferation of cloud computing has transformed how organisations analyse
+and act on data. Machine learning models that once required expensive on-premise
+infrastructure can now be accessed as cloud services, enabling smaller
+organisations to leverage sophisticated analytics capabilities. Among these,
+anomaly detection , the automated identification of observations that deviate
+significantly from expected normal behaviour has emerged as a critical
+capability. It underpins fraud detection in financial systems, intrusion
+detection in network security, fault prediction in industrial operations, disease
+surveillance in healthcare monitoring, and quality control in manufacturing
+processes.
+
+However, this shift to cloud-based anomaly detection introduces a severe and
+often underappreciated privacy risk. Anomaly detection requires the cloud server
+to access raw data in order to compute anomaly scores. In virtually every domain
+where anomaly detection is useful, this data is highly sensitive:
+
+\begin{itemize}
+  \item In \textbf{healthcare}, continuous patient monitoring systems generate
+  physiological signals --- heart rate, blood pressure, oxygen saturation,
+  neurological activity that constitute protected health information. Exposure
+  of this data to cloud providers violates patient confidentiality and, in many
+  jurisdictions, applicable law.
+
+  \item In \textbf{finance}, transaction records, account balances, and payment
+  patterns reveal personal spending behaviour, business relationships, investment
+  strategies, and operational details that competitors or adversaries could
+  exploit.
+
+  \item In \textbf{industrial operations}, process sensor readings encode
+  operational parameters, equipment configurations, production rates, and
+  process chemistry that represent valuable intellectual property and, in the
+  context of critical infrastructure, potential national security assets.
+
+  \item In \textbf{network security}, traffic patterns reveal internal
+  infrastructure topology, communication behaviour, user activity, and the
+  presence of sensitive systems that attackers could use to plan intrusions.
+\end{itemize}
+
+The fundamental tension is clear: \textit{effective anomaly detection requires
+the server to see the data, but the data is too sensitive to share with the
+server.} Conventional approaches to this tension are unsatisfying. Anonymisation
+and aggregation reduce utility. Differential privacy adds noise that degrades
+detection accuracy. Encrypting data during transmission (transport-layer
+security) does not protect it at the server, which must decrypt before
+processing.
+
+\section{Homomorphic Encryption as a Solution}
+
+Homomorphic Encryption (HE) offers a fundamentally different approach. Rather
+than protecting data during transmission and exposing it at the server, HE
+enables computation directly on ciphertext. Arithmetic operations like addition,
+multiplication, and their compositions can be performed on encrypted values
+such that the encrypted result, when decrypted by the data owner, equals the
+result of the same operations on the original plaintexts.
+
+This property has a profound consequence for privacy-preserving anomaly
+detection: the detection server can compute anomaly scores on encrypted sensor
+data without ever holding the decryption key or accessing any plaintext value.
+The data owner (the client) encrypts their data using their public key, sends
+the ciphertexts to the server, the server computes encrypted anomaly scores, and
+returns them to the client, who decrypts using their secret key to obtain the
+final anomaly classifications. At no point does the server observe or access any
+individual data point.
+
+The Cheon-Kim-Kim-Song (CKKS) scheme \cite{ckks}, introduced in 2017, is
+particularly well suited to this application because it supports
+\textit{approximate} arithmetic on real valued vectors. Unlike earlier schemes
+that operated on integers, CKKS natively encodes floating point measurements in
+ciphertext slots, making it directly applicable to the continuous sensor
+readings and normalised feature vectors that characterise anomaly detection
+datasets.
+
+\section{The Central Technical Challenge: Division Under Encryption}
+
+While HE enables addition and multiplication on ciphertexts, it does not
+natively support division. This is a critical limitation for anomaly detection,
+because the most effective unsupervised algorithms require division at
+fundamental computational steps:
+
+The Statistical Anomaly Detector (SAD) computes the per feature mean
+$\mu_j = \frac{1}{N}\sum_{i=1}^N x_{ij}$ (requiring division by $N$) and the
+variance normalised anomaly score $s(\mathbf{x}) = \sum_{j=1}^d
+\frac{(x_j - \mu_j)^2}{\sigma_j^2}$ (requiring division by $\sigma_j^2$
+for each feature).
+
+PCA based anomaly detection similarly requires computing the feature mean
+before centring the data for projection onto principal components.
+
+Without division, these algorithms cannot be faithfully implemented under
+homomorphic encryption. This thesis identifies this as the primary technical
+obstacle and proposes a solution: the \textbf{multi-round interactive
+protocol}, in which the encrypted denominator is sent to the key-holding data
+owner, who decrypts it, computes the exact reciprocal in plaintext, and
+re-encrypts the result and sends it back. This achieves zero approximation error at zero
+additional HE depth cost, making it superior to both Newton-Raphson iterative
+inversion (which diverges on realistic data distributions) and Chebyshev
+polynomial approximation (which produces unacceptable errors at usable degree).
+
+\section{Research Objectives}
+
+This thesis pursues the following research objectives:
+
+\begin{enumerate}
+  \item \textbf{Empirical library selection:} Conduct a systematic benchmark
+  of FHE libraries to identify the most suitable foundation for privacy-
+  preserving anomaly detection, characterising the performance trade offs between
+  arithmetic speed, multiplication depth, and hardware acceleration support.
+
+  \item \textbf{Exact encrypted division:} Design, implement, and evaluate
+  approaches to division under CKKS encryption, identifying the limitations of
+  existing approximation methods and proposing an exact alternative.
+
+  \item \textbf{HE-compatible algorithm design:} Implement Statistical Anomaly
+  Detection and Principal Component Analysis entirely under CKKS encryption,
+  designing the computation to minimise HE depth consumption and noise
+  accumulation.
+
+  \item \textbf{End-to-end pipeline:} Build a complete, dataset agnostic
+  preprocessing and encryption pipeline that converts raw multivariate data to
+  CKKS encrypted form suitable for server side anomaly scoring.
+
+  \item \textbf{Network deployment:} Deploy the encrypted anomaly detection
+  system as a client-server network application with real time monitoring,
+  demonstrating practical usability beyond a research prototype.
+
+  \item \textbf{Empirical evaluation:} Measure detection accuracy (AUC) of
+  the HE-based system against plaintext baselines on real world benchmark
+  datasets, quantifying the accuracy cost of privacy preserving encryption.
+\end{enumerate}
+
+\section{Research Gap}
+
+A review of the existing literature on privacy-preserving machine learning
+and anomaly detection reveals the following gaps that this thesis addresses:
+
+\textbf{Gap 1 --- Transport vs computational privacy.} The overwhelming majority
+of deployed ``privacy-preserving'' anomaly detection systems provide only
+transport layer privacy: data is encrypted during network transmission but
+decrypted at the server before processing. The server observes all plaintext
+values. Genuinely privacy-preserving systems, where the server computes on
+ciphertexts without ever decrypting individual observations, are rare.
+
+\textbf{Gap 2 --- Supervised vs unsupervised methods.} The few existing systems
+that do provide computational privacy are predominantly supervised: they require
+labeled examples of anomalous behaviour for training. In practice, labeled
+anomaly data is scarce, expensive to produce, and inherently incomplete, because
+anomalies by definition include novel patterns not observed before. Unsupervised
+methods, which learn only from normal behaviour, are far more practical but
+are rarely implemented under homomorphic encryption.
+
+\textbf{Gap 3 --- Division in HE-based ML.} No systematic treatment of the
+encrypted division problem , which is fundamental to most anomaly detection
+algorithms exists in the literature in the context of real valued CKKS based
+anomaly detection. Existing works either avoid algorithms requiring division
+or apply approximations without characterising their error on real data.
+
+\textbf{Gap 4 --- End-to-end deployment.} Existing HE-based anomaly detection
+research focuses on algorithm level demonstrations without network deployment,
+practical batching strategies for large ciphertext transfers, or real time
+monitoring infrastructure. This limits the transition from research prototype
+to usable system.
+
+\section{Contributions}
+
+This thesis makes the following original contributions to the field of
+privacy-preserving machine learning:
+
+\begin{enumerate}
+  \item \textbf{Multi-round interactive protocol for exact encrypted division.}
+  A protocol that resolves the encrypted division problem exactly, with
+  zero approximation error and zero additional HE depth cost. The protocol
+  uses the key-holding data owner as a trusted computation agent for aggregate
+  parameter inversion, which is shown to be privacy-preserving because only
+  global model statistics (not individual data points) are revealed.
+
+  \item \textbf{Systematic comparison of division approaches.}
+  The first systematic comparison of Newton-Raphson iterative inversion,
+  Chebyshev polynomial approximation, and the multi round protocol for encrypted
+  division in the context of real valued anomaly detection, with quantitative
+  characterisation of failure modes and error bounds on real data distributions.
+
+  \item \textbf{HE-SAD: complete CKKS implementation of Statistical Anomaly
+  Detection.} A 9-round homomorphic protocol implementing variance-normalised
+  anomaly scoring entirely on CKKS ciphertexts. HE-SAD achieves AUC $= 0.9533$
+  on the SWaT dataset, demonstrating that full CKKS privacy preserving
+  implementation incurs no accuracy penalty compared to plaintext detection.
+
+  \item \textbf{HE-PCA: complete CKKS implementation of PCA-based anomaly
+  detection.} An 8-round homomorphic protocol implementing PCA reconstruction
+  error scoring with automatic optimal component selection. The analysis of
+  accuracy loss in HE-PCA versus plaintext PCA provides the first empirical
+  characterisation of CKKS noise effects on matrix projection operations in the
+  anomaly detection context.
+
+  \item \textbf{Dataset-agnostic preprocessing and encryption pipeline.}
+  A generalized 5-stage pipeline that converts any multivariate time-series
+  dataset to CKKS-encrypted form, handling heterogeneous continuous and binary
+  feature types, computing all normalization parameters from normal data only,
+  and applying SIMD-optimized column-major and row-major encoding strategies
+  that minimize noise accumulation during HE computation.
+
+  \item \textbf{Network-deployed system with live monitoring.}
+  A complete network deployment of the privacy-preserving detection system using
+  FastAPI for the detection server, HTTP client with batched ciphertext transfer,
+  asynchronous score computation, and a live SocketIO monitoring dashboard with
+  browser based controls. The deployment demonstrates practical usability with
+  only two terminal processes required.
+
+  \item \textbf{FHE library benchmarking study.}
+  A four experiment systematic benchmark of Microsoft SEAL, IBM HElib, and
+  Pyfhel, covering arithmetic operation latency, rotation operation latency,
+  maximum multiplication depth, and noise budget evolution, providing an
+  empirical foundation for FHE library selection in ML workloads.
+\end{enumerate}
+
+\section{Scope and Assumptions}
+
+This thesis operates under the following scope and assumptions:
+
+\begin{itemize}
+  \item The threat model assumes an \textit{honest-but-curious} server: the
+  server follows the protocol correctly but attempts to infer information about
+  the data from the ciphertexts and computation results it observes.
+
+  \item The privacy guarantee covers individual data points. Aggregate model
+  parameters ($N$, $\sigma^2_j$) are treated as public, analogous to the
+  parameters of a deployed ML model.
+
+  \item The evaluation focuses on the unsupervised anomaly detection setting,
+  where only normal data is available for training.
+
+  \item All experiments are conducted on a single machine (localhost) to
+  characterize algorithmic performance independently of network conditions.
+
+  \item CKKS is used without bootstrapping (leveled HE), relying on careful
+  algorithm design to stay within the available multiplication budget and complexity.
+\end{itemize}
+
+\section{Thesis Organization}
+
+The remainder of this thesis is organized as follows:
+
+\textbf{Chapter 2} reviews the mathematical foundations of homomorphic
+encryption, with particular attention to the CKKS scheme, its parameters, and
+the trade-offs they entail. It covers the anomaly detection algorithms used,
+related work on privacy-preserving ML and anomaly detection, and the benchmark
+datasets used for evaluation.
+
+\textbf{Chapter 3} presents the FHE library benchmarking study, detailing the
+experimental methodology, results across four experimental categories, and the
+empirical rationale for selecting Microsoft SEAL as the implementation
+foundation.
+
+\textbf{Chapter 4} describes the system architecture, the dataset agnostic
+preprocessing and encryption pipeline, the CKKS encoding strategies, and the
+multi-round interactive protocol for encrypted division, including a systematic
+analysis of why alternative approaches fail.
+
+\textbf{Chapter 5} presents the HE-SAD and HE-PCA algorithm implementations,
+the network deployment architecture, implementation challenges and their
+resolutions, plaintext baseline models, and experimental results comparing
+privacy-preserving and plaintext anomaly detection.
+
+\textbf{Chapter 6} discusses the key findings, limitations of the current
+implementation, directions for future work, and concludes the thesis.
+
+\end{spacing}

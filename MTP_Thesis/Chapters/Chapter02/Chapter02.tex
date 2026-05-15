@@ -1,0 +1,465 @@
+\chapter{Background and Related Work}
+\chaptermark{Background and Related Work}
+\HRule\\[2cm]
+\label{Chapter2}
+\lhead{\emph{\textbf{Chapter 2:} Background and Related Work}}
+
+\begin{spacing}{1.6}
+
+\section{Homomorphic Encryption}
+
+\subsection{Historical Overview}
+
+The concept of homomorphic encryption was first described by Rivest, Adleman,
+and Dertouzos in 1978 \cite{rivest1978}, who posed the question of whether it
+was possible to perform computations on encrypted data. Early schemes such as
+RSA and Paillier supported either multiplication or addition homomorphically,
+but not both, limiting their utility. The construction of a
+\textit{Fully Homomorphic Encryption} (FHE) scheme capable of evaluating
+arbitrary circuits was not achieved until Gentry's landmark work in 2009
+\cite{gentry2009}, which used ideal lattice-based cryptography. While
+theoretically groundbreaking, Gentry's scheme was too computationally expensive
+for practical use.
+
+Subsequent work produced a series of increasingly efficient FHE schemes:
+
+\begin{itemize}
+  \item \textbf{BGV} (Brakerski, Gentry, Vaikuntanathan, 2012): A Somewhat
+  Homomorphic Encryption (SHE) scheme based on Ring Learning With Errors
+  (RLWE), supporting integer arithmetic with batch processing via SIMD packing.
+  \item \textbf{BFV} (Fan, Vercauteren, 2012): A variant of BGV with improved
+  noise management, implemented in Microsoft SEAL.
+  \item \textbf{CKKS} (Cheon, Kim, Kim, Song, 2017): The first scheme designed
+  for approximate arithmetic on real numbers, enabling efficient computation on
+  floating-point data without quantization.
+\end{itemize}
+
+\subsection{Mathematical Foundations of CKKS}
+
+The CKKS scheme \cite{ckks} operates over polynomial rings of the form
+$\mathcal{R} = \mathbb{Z}[X]/(X^n + 1)$, where $n$ is the polynomial modulus
+degree, which must be a power of two. The security of the scheme rests on the
+hardness of the Ring Learning With Errors (RLWE) problem.
+
+\textbf{Encoding:} The CKKS encoder maps a vector of $n/2$ complex (or real)
+numbers to a polynomial in $\mathcal{R}$ via the inverse of the canonical
+embedding. This encoding naturally supports element-wise (SIMD) operations:
+adding or multiplying two encoded polynomials corresponds to element-wise
+addition or multiplication of the original complex vectors. For a polynomial
+modulus degree of $n = 16384$, each ciphertext encodes $8192$ real values
+simultaneously.
+
+\textbf{Encryption:} A plaintext polynomial $m \in \mathcal{R}$ is encrypted
+by computing:
+\begin{equation}
+  \mathrm{ct} = (c_0, c_1) = (m + e_0 + pk_0 \cdot u, e_1 + pk_1 \cdot u)
+\end{equation}
+where $pk = (pk_0, pk_1)$ is the public key, $u$ is a small random polynomial,
+and $e_0, e_1$ are small error polynomials drawn from a discrete Gaussian
+distribution. The error polynomials provide semantic security under RLWE.
+
+\textbf{Homomorphic Operations:}
+
+\textit{Addition:} For ciphertexts $\mathrm{ct}_1$ and $\mathrm{ct}_2$:
+\begin{equation}
+  \mathrm{ct}_1 + \mathrm{ct}_2 = (c_0^{(1)} + c_0^{(2)}, c_1^{(1)} + c_1^{(2)})
+\end{equation}
+Addition is exact (up to encoding precision) and does not consume multiplication
+levels.
+
+\textit{Multiplication:} Ciphertext multiplication produces a degree-2
+polynomial requiring \textit{relinearization} (using relinearization keys) to
+return to the standard form $(c_0, c_1)$. Each multiplication also scales up
+the ciphertext, requiring \textit{rescaling} to bring it back to the target
+scale:
+\begin{equation}
+  \mathrm{ct}_1 \otimes \mathrm{ct}_2 \rightarrow
+  \mathrm{Relinearize} \rightarrow \mathrm{Rescale}
+\end{equation}
+Each rescaling operation reduces the coefficient modulus by one prime from the
+modulus chain, consuming one multiplication \textit{level}.
+
+\textbf{Level Management:} The coefficient modulus is a product of primes
+$q = q_0 \cdot q_1 \cdots q_L$. Each rescaling removes one prime, reducing
+the remaining budget by one level. When the budget is exhausted, further
+multiplications are not possible without bootstrapping. The number of usable
+levels is determined by the length of the modulus chain minus the first and
+last special primes.
+
+\textbf{Rotations:} The slot vector can be cyclically shifted using Galois
+automorphisms, requiring precomputed Galois keys. A left rotation by $k$
+positions maps slot $i$ to slot $i-k$ (mod $n/2$). Rotations do not consume
+multiplication levels but do require a key-switching operation.
+
+\textbf{Approximate Arithmetic:} Unlike BFV which is exact for integer
+arithmetic, CKKS introduces a bounded approximation error $|\varepsilon|
+\leq 2^{-\Delta}$ where $\Delta$ is the scaling factor (typically $2^{40}$
+for 40-bit precision). This error is tolerable for ML applications where
+exact arithmetic is not required.
+
+\subsection{CKKS Parameters and Their Trade-offs}
+
+\begin{table}[H]
+\centering
+\caption{CKKS Parameter Definitions and Trade-offs}
+\label{tab:ckks_params}
+\begin{tabular}{p{3.5cm}p{4cm}p{4cm}}
+\toprule
+\textbf{Parameter} & \textbf{Effect on Security/Capacity} & \textbf{Effect on Performance} \\
+\midrule
+\texttt{poly\_modulus\_degree} $n$ &
+Larger $n$ $\to$ higher security, more SIMD slots ($n/2$), larger modulus budget &
+Larger $n$ $\to$ $O(n \log n)$ NTT operations, higher per-operation cost \\
+\midrule
+\texttt{coeff\_modulus} chain &
+More primes $\to$ more multiplication levels; total bit-length determines security &
+Longer chain $\to$ larger ciphertexts, more key-switching cost \\
+\midrule
+Scale $\Delta = 2^p$ &
+Larger $\Delta$ $\to$ more precision, more bits per prime consumed per rescale &
+Larger $\Delta$ $\to$ fewer levels available from same modulus budget \\
+\midrule
+Galois keys &
+Required for rotation operations &
+Precomputation cost; stored as part of server key material \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[H]
+\centering
+\caption{Microsoft SEAL CKKS Configurations Used in This Work}
+\label{tab:ckks_config}
+\begin{tabular}{lll}
+\toprule
+\textbf{Parameter} & \textbf{Preprocessing Phase} & \textbf{HE Detection Pipeline} \\
+\midrule
+Scheme & CKKS & CKKS \\
+\texttt{poly\_modulus\_degree} & 8192 & 16384 \\
+\texttt{coeff\_modulus} bits & [60, 40, 40, 60] & [60, 40, 40, 40, 40, 40, 60] \\
+Scale $\Delta$ & $2^{40}$ & $2^{40}$ \\
+SIMD slots & 4096 & 8192 \\
+Usable levels & 1 & 5 \\
+Security level & 128-bit & 128-bit \\
+Decryption error bound & $\leq 10^{-9}$ & $\approx 10^{-9}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The degree 16384 configuration with 5 levels was selected for the detection
+pipeline to accommodate both HE-SAD (2 levels) and HE-PCA (3 levels) with
+headroom for future extensions, while maintaining 128-bit security.
+
+\section{Unsupervised Anomaly Detection}
+
+\subsection{Problem Formulation}
+
+Let $\mathcal{X}_\text{train} = \{\mathbf{x}_1, \ldots, \mathbf{x}_N\}$ denote
+the training dataset consisting of $N$ observations from the normal class only,
+where each observation $\mathbf{x}_i \in \mathbb{R}^d$ is a $d$-dimensional
+feature vector. An anomaly detection model learns a function $f: \mathbb{R}^d
+\to \mathbb{R}$ that assigns an anomaly score $s = f(\mathbf{x})$ to any test
+observation, where higher scores indicate greater deviation from normal
+behaviour. A threshold $\tau$ separates normal ($s \leq \tau$) from anomalous
+($s > \tau$) observations. The unsupervised setting requires $f$ to be learned
+without any labeled anomaly examples.
+
+\subsection{Statistical Anomaly Detection (SAD)}
+
+\subsubsection{Algorithm}
+
+SAD models normal behaviour under a multivariate Gaussian assumption. The
+per-feature mean $\mu_j$ and variance $\sigma_j^2$ are estimated from the
+normal training data:
+\begin{align}
+  \mu_j &= \frac{1}{N} \sum_{i=1}^N x_{ij} \\
+  \sigma_j^2 &= \frac{1}{N} \sum_{i=1}^N (x_{ij} - \mu_j)^2
+\end{align}
+
+The anomaly score for a test observation $\mathbf{x}$ is the diagonal
+Mahalanobis distance:
+\begin{equation}
+  s(\mathbf{x}) = \sum_{j=1}^d \frac{(x_j - \mu_j)^2}{\sigma_j^2}
+  \label{eq:sad}
+\end{equation}
+
+This score measures the total normalised squared deviation from the normal
+mean across all features. Each feature contributes independently, with
+features having lower variance (more consistent in normal operation) receiving
+proportionally higher weight when they deviate.
+
+\subsubsection{Threshold Computation}
+
+The detection threshold is set according to the three-sigma rule applied to
+training scores:
+\begin{equation}
+  \tau = \bar{s}_\text{train} + 3 \sigma_{s,\text{train}}
+\end{equation}
+where $\bar{s}_\text{train}$ and $\sigma_{s,\text{train}}$ are the mean and
+standard deviation of scores computed on the normal training set. Under the
+Gaussian assumption, this threshold captures approximately 99.7\% of the normal
+score distribution, yielding a theoretical false positive rate of 0.3\%.
+
+\subsubsection{HE Compatibility}
+
+Every operation in Equation~\eqref{eq:sad} is a polynomial operation:
+subtraction ($x_j - \mu_j$), squaring, scalar multiplication (by
+$1/\sigma_j^2$), and summation. This makes SAD natively executable under
+CKKS encryption without any non-polynomial function approximation.
+
+\subsection{PCA-Based Anomaly Detection}
+
+\subsubsection{Algorithm}
+
+PCA anomaly detection identifies observations that deviate from the normal
+operating subspace. Principal Component Analysis is applied to the centred
+normal training data to find the directions of maximum variance:
+\begin{equation}
+  \mathbf{C} = \frac{1}{N-1} \sum_{i=1}^N (\mathbf{x}_i - \boldsymbol{\mu})
+  (\mathbf{x}_i - \boldsymbol{\mu})^\top = \mathbf{V} \mathbf{\Lambda}
+  \mathbf{V}^\top
+\end{equation}
+where $\mathbf{V} \in \mathbb{R}^{d \times d}$ contains the eigenvectors
+(principal components) and $\mathbf{\Lambda} = \mathrm{diag}(\lambda_1,
+\ldots, \lambda_d)$ the corresponding eigenvalues in decreasing order.
+
+The first $k^*$ principal components span the \textit{normal subspace}
+$\mathbf{V}_{k^*} \in \mathbb{R}^{k^* \times d}$. The anomaly score is the
+reconstruction error when projecting onto this subspace:
+\begin{equation}
+  s(\mathbf{x}) = \left\| (\mathbf{x} - \boldsymbol{\mu}) -
+  \mathbf{V}_{k^*}^\top \mathbf{V}_{k^*} (\mathbf{x} - \boldsymbol{\mu})
+  \right\|^2
+  \label{eq:pca}
+\end{equation}
+
+Normal observations lie near the normal subspace (low reconstruction error)
+while anomalous observations deviate from it (high error).
+
+\subsubsection{Optimal Component Selection}
+
+The number of principal components $k^*$ is selected as the minimum $k$ that
+explains a prescribed fraction $\theta$ of the total variance:
+\begin{equation}
+  k^* = \min \left\{ k : \frac{\sum_{i=1}^k \lambda_i}
+  {\sum_{i=1}^d \lambda_i} \geq \theta \right\}
+  \label{eq:optk}
+\end{equation}
+A threshold of $\theta = 0.90$ (90\% explained variance) is used in this work,
+consistent with standard PCA practice. This selection is performed automatically
+by the system and reported in the monitoring dashboard.
+
+\subsubsection{HE Compatibility}
+
+PCA reconstruction error is computable under CKKS because it involves only
+inner products (multiply-plain + slot sum), subtraction, and squaring ---
+all polynomial operations. No eigendecomposition occurs during inference;
+the component matrix $\mathbf{V}_{k^*}$ is fitted in plaintext on the training
+data (a model parameter, not individual data) and used as a plaintext constant
+during HE scoring.
+
+\subsection{Comparison with Other Methods}
+
+\begin{table}[H]
+\centering
+\caption{Anomaly Detection Methods: HE Compatibility Analysis}
+\label{tab:methods}
+\begin{tabular}{p{2.5cm}p{3cm}p{2cm}p{3cm}}
+\toprule
+\textbf{Method} & \textbf{Anomaly criterion} & \textbf{HE compatible} & \textbf{Reason if not} \\
+\midrule
+SAD & Per-feature deviation from mean & Yes & Polynomial operations only \\
+PCA & Subspace reconstruction error & Yes & Polynomial operations only \\
+Isolation Forest & Statistical isolation depth & No & Non-polynomial branching \\
+Autoencoder & Neural reconstruction error & Partially & Deep circuits exhaust levels \\
+One-class SVM & Distance from hyperplane & No & Kernel evaluation non-polynomial \\
+Local Outlier Factor & Local density ratio & No & Non-polynomial neighbourhood \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+SAD and PCA are chosen for this work because they satisfy the polynomial
+constraint imposed by CKKS, are fully unsupervised, and have demonstrated
+competitive performance on the benchmark datasets used for evaluation.
+
+\section{Related Work}
+
+\subsection{Homomorphic Encryption in Machine Learning}
+
+The application of homomorphic encryption to machine learning inference was
+pioneered by CryptoNets \cite{gilad}, which demonstrated convolutional neural
+network inference on CKKS-encrypted MNIST data. While achieving 99\% accuracy,
+the approach required several minutes per prediction and was limited to simple
+polynomial activation functions (squared activations instead of ReLU). The
+work established the feasibility of HE-based ML inference but focused entirely
+on image classification with public models.
+
+HEAR \cite{hear} (nGraph-HE2) extended HE inference to larger neural networks
+using graph-level optimizations to minimize HE depth consumption. Gazelle
+\cite{gazelle} combined HE with garbled circuits to handle non-linear
+operations efficiently in a two-party protocol. CrypTen \cite{crypten} provides
+a secure computing framework combining multiple cryptographic primitives
+including HE.
+
+All of these works protect the \textit{query} (the input to the model) while
+the model itself is public and held by the server. They do not address the
+setting where the data corpus itself is sensitive and must be protected from
+the party performing the computation.
+
+\subsection{Privacy-Preserving Anomaly Detection}
+
+Privacy-preserving anomaly detection has been addressed through several
+cryptographic approaches:
+
+\textbf{Differential Privacy:} Dwork and Roth \cite{dwork} formalized
+differential privacy (DP) as a mechanism for releasing statistical queries
+about datasets with bounded privacy loss. DP-based anomaly detection adds
+calibrated noise to model parameters or scores to prevent inference of
+individual records. While providing strong formal guarantees, the noise addition
+degrades detection accuracy, particularly for small anomaly datasets where the
+signal-to-noise ratio is already limited.
+
+\textbf{Secure Multi-Party Computation (MPC):} MPC protocols allow multiple
+parties to jointly compute a function without revealing their inputs. Applied
+to anomaly detection, MPC enables collaborative model training without data
+sharing but requires multiple rounds of communication between non-colluding
+servers. The communication overhead grows with the complexity of the function
+being computed, making it challenging for high-dimensional data.
+
+\textbf{HE-based specific approaches:} Bost et al. \cite{bost2015} proposed
+HE-based protocols for classification tasks including naive Bayes and
+decision trees but required label exposure for prediction. Carpov et al.
+\cite{carpov2019} demonstrated encrypted prediction for healthcare monitoring
+but in a supervised setting requiring labeled training data.
+
+\textbf{Gap:} No prior work presents a generalized, fully unsupervised,
+end-to-end HE-based anomaly detection system that: (a) protects raw training
+and test data from the detection server, (b) requires no labeled anomaly
+examples, (c) solves encrypted division exactly, and (d) is deployed as a
+practical network application.
+
+\subsection{PIR and HE Systems for Data Retrieval}
+
+The benchmarking study in this thesis was motivated by experience with Private
+Information Retrieval (PIR) systems that use HE:
+
+\textbf{Pantheon \cite{pantheon}} enables clients to retrieve values from
+key-value stores without revealing which key was queried, using HE and Fermat's
+Little Theorem for equality testing.
+
+\textbf{NewtonPIR \cite{newtonPIR}} uses Newton polynomial interpolation within
+a single-ciphertext FHE scheme to minimize communication overhead in PIR.
+
+\textbf{FastPIR \cite{fastPIR}} applies RLWE-based encryption with batching
+and polynomial packing to achieve sublinear communication cost.
+
+\textbf{Distributed PIR \cite{distributedPIR}} reduces overhead by directing
+queries probabilistically to a popular database subset, with fallback to the
+full database.
+
+These systems established the performance characteristics of FHE libraries
+in a retrieval context, directly informing the library selection benchmarking
+study presented in Chapter~3.
+
+\section{Evaluation Datasets}
+
+\subsection{SWaT --- Secure Water Treatment Dataset}
+
+The SWaT dataset \cite{swat} was collected by iTrust, Singapore University of
+Technology and Design (SUTD), from a fully operational 6-stage water treatment
+testbed over 11 days of continuous operation. The testbed replicates a realistic
+water treatment process including ultrafiltration, dechlorination, reverse
+osmosis, and ultraviolet dechlorination stages, controlled by a SCADA system
+with hierarchical network architecture.
+
+Data was collected under normal operating conditions for 7 days, followed by
+4 days of attack experiments designed and executed by cybersecurity researchers.
+The attack scenarios cover 41 distinct events including pump manipulation, valve
+tampering, sensor spoofing, and coordinated multi-point attacks.
+
+\begin{table}[H]
+\centering
+\caption{SWaT Dataset Detailed Statistics}
+\label{tab:swat_detail}
+\begin{tabular}{ll}
+\toprule
+\textbf{Property} & \textbf{Value} \\
+\midrule
+Total rows & 1,441,719 \\
+Normal rows & 1,387,098 (96.2\%) \\
+Attack rows & 54,621 (3.8\%) \\
+Total features & 51 \\
+Continuous features & 26 (flow rates, levels, pressures) \\
+Binary features & 25 (pump/valve states) \\
+Sampling rate & 1 second \\
+Normal operation period & 7 days \\
+Attack period & 4 days \\
+Distinct attack scenarios & 41 \\
+Training rows used & 5,000 (normal only) \\
+Test rows used & 2,000 (1,800 normal + 200 attack) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The 51 features include continuous analog sensor readings (flow rates measured
+by FIT sensors, water levels by LIT sensors, pressures by PIT sensors) and
+binary digital actuator states (pump on/off signals from P-series sensors,
+motorized valve open/closed positions from MV-series sensors). This
+heterogeneity between continuous and binary features motivates the type-aware
+normalization strategy described in Chapter~4.
+
+\subsection{BATADAL --- Battle of Attack Detection Algorithms}
+
+The BATADAL dataset \cite{batadal} was generated from C-Town, a realistic
+medium-sized water distribution network benchmark, as part of an international
+competition organized to compare anomaly detection algorithms across research
+groups. The dataset includes 43 operational parameters covering tank levels,
+junction pressures, pump operating states, and flow rates.
+
+\begin{table}[H]
+\centering
+\caption{BATADAL Dataset Detailed Statistics}
+\label{tab:batadal_detail}
+\begin{tabular}{ll}
+\toprule
+\textbf{Property} & \textbf{Value} \\
+\midrule
+Total features & 43 \\
+Continuous features & 28 (tank levels, pressures, flows) \\
+Binary features & 15 (pump/valve states) \\
+Sampling interval & 1 hour \\
+Normal training rows & 8,761 \\
+Test rows & 2,089 \\
+Attack ratio in test & 19.5\% \\
+Label column & \texttt{ATT\_FLAG} (0 = normal, 1 = attack) \\
+Attack categories & 7 distinct attack scenarios \\
+Attack strategy & SCADA-level concealment \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+A distinctive feature of BATADAL is its attack design philosophy: each attack
+scenario was crafted by domain experts to remain statistically plausible at the
+individual sensor level, mimicking the appearance of normal operation while
+causing physical consequences in the network. This concealment strategy
+deliberately confounds per-feature statistical methods (such as SAD, which
+analyses each feature independently) while disrupting feature correlations
+that PCA captures. This property makes BATADAL a useful stress-test for methods
+based on feature correlation structure.
+
+\begin{table}[H]
+\centering
+\caption{Feature Categorization Comparison}
+\label{tab:featcat}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Feature Type} & \textbf{SWaT} & \textbf{BATADAL} \\
+\midrule
+Continuous & 26 & 28 \\
+Binary & 25 & 15 \\
+Total & 51 & 43 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\end{spacing}

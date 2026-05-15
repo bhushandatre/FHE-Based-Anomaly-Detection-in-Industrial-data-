@@ -1,0 +1,90 @@
+\begingroup\setcounter{secnumdepth}{2}
+
+Anomaly detection is a foundational machine learning capability deployed
+across critical domains including healthcare monitoring, financial fraud
+detection, industrial process supervision, and network intrusion detection.
+In each of these domains, the data being analysed is highly sensitive:
+patient physiological signals, financial transaction records, process sensor
+readings, and network traffic all carry significant privacy requirements that
+prohibit direct exposure to third-party cloud servers. Yet conventional anomaly
+detection systems require the detection server to have unrestricted access to
+raw plaintext data in order to compute anomaly scores, creating a fundamental
+and unresolved conflict between anomaly detection and data privacy.
+
+Homomorphic Encryption (HE) offers a cryptographically principled resolution
+to this tension. The Homomorphic Encryption scheme permits approximate
+arithmetic computation --- addition, multiplication, and their compositions ---
+directly on ciphertexts, such that the result, when decrypted by the data
+owner, exactly matches the result of the same computation on the original
+plaintexts. This property can enable computing anomaly scores on
+encrypted data without ever exposing the underlying plaintext values. The
+data owner can retain the secret decryption key and receive only the final
+anomaly classification decisions.
+
+This thesis presents the complete design, implementation, and network
+deployment of a \textbf{Privacy-Preserving Anomaly Detection Framework} built
+on the CKKS scheme of Homomorphic Encryption implemented in Microsoft SEAL. The framework addresses the
+full pipeline from raw data ingestion to encrypted anomaly scoring and
+classification, encompassing preprocessing, CKKS-compatible encoding,
+homomorphic computation, network transport, and real-time monitoring.
+
+The central technical challenge in building such a system is that standard
+anomaly detection algorithms require division at critical points --- computing
+the feature mean $\mu_j = \frac{1}{N}\sum_{i=1}^N x_{ij}$ and the
+variance-normalized anomaly score $s(\mathbf{x}) = \sum_j
+\frac{(x_j-\mu_j)^2}{\sigma_j^2}$ --- while the CKKS scheme natively supports
+only addition and multiplication. This thesis proposes and evaluates three
+approaches to encrypted division: Newton-Raphson iterative inversion, Chebyshev
+polynomial approximation, and a novel multi-round interactive protocol. The
+multi-round protocol, which routes the encrypted denominator through the
+key-holding data owner for exact plaintext inversion and re-encryption, is
+shown to be the only viable approach, achieving zero approximation error at
+zero additional HE depth cost.
+
+Two unsupervised anomaly detection algorithms are implemented entirely under
+encryption using the CKKS scheme:
+
+\begin{itemize}
+  \item \textbf{HE-SAD (Homomorphic Statistical Anomaly Detection):}
+  A complete CKKS implementation of variance-normalized Mahalanobis distance
+  scoring, operating through a 9-round interactive protocol. HE-SAD achieves
+  AUC $= 0.9533$ on the SWaT Secure Water Treatment benchmark dataset,
+  matching the plaintext baseline AUC of $0.929$ and demonstrating that no
+  fundamental accuracy penalty results from privacy-preserving encryption.
+  The implementation consumes only 2 of 5 available HE multiplication levels
+  per test row, leaving substantial headroom for future extensions.
+
+  \item \textbf{HE-PCA (Homomorphic Principal Component Analysis):}
+  A complete CKKS implementation of PCA reconstruction error scoring with
+  automatic optimal component selection based on a configurable explained
+  variance threshold. HE-PCA operates through an 8-round protocol and
+  consumes 3 of 5 available HE levels per row. A slight AUC reduction
+  compared to the plaintext PCA baseline is observed and attributed to CKKS
+  approximation noise accumulating across the $k$ component projection
+  operations, a characteristic of leveled HE for matrix computations.
+\end{itemize}
+
+The framework is deployed as a network application using FastAPI for the
+detection server and Flask with SocketIO for a live browser-based monitoring
+dashboard. Ciphertexts are transferred in batches of 100 per HTTP request
+to avoid socket buffer overflow. Score computation runs asynchronously in a
+background thread. The dashboard embeds full client logic, requiring only two
+terminal processes to operate the complete system.
+
+This work is grounded in a prior systematic benchmarking study of three
+widely-used FHE libraries --- Microsoft SEAL, IBM HElib, and Pyfhel ---
+across four experimental categories covering arithmetic operations, rotation
+operations, maximum multiplication depth, and noise budget evolution. The
+benchmarking study provides the empirical foundation for library and parameter
+selection, identifying SEAL as the most performant library for real-valued
+anomaly detection workloads with the deepest available multiplication budget
+(depth 32 at polynomial degree 32768).
+
+The framework is evaluated on two publicly available benchmark datasets: SWaT
+(51 features, collected from a water treatment testbed) and BATADAL (43
+features, from a water distribution network simulation). Both datasets represent
+realistic multivariate time-series data with heterogeneous continuous and binary
+features, serving as representative benchmarks for privacy-preserving anomaly
+detection research.
+
+\endgroup

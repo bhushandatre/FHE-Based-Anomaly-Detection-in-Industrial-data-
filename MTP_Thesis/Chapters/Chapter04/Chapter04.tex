@@ -1,0 +1,518 @@
+\chapter{System Design: Preprocessing Pipeline and Encrypted Division Protocol}
+\chaptermark{System Design}
+\HRule\\[2cm]
+\label{Chapter4}
+\lhead{\emph{\textbf{Chapter 4:} System Design}}
+
+\begin{spacing}{1.6}
+
+\section{System Architecture}
+
+\subsection{Privacy Model and Threat Model}
+
+The system is designed under an \textit{honest-but-curious} adversary model:
+the detection server follows the protocol specification correctly but may
+attempt to infer information about individual data points from the ciphertexts
+it receives, the intermediate computations it performs, and the values it
+returns to the client.
+
+The privacy guarantee enforced throughout all protocol phases is as follows:
+
+\begin{itemize}
+  \item The \textbf{data owner (client)} holds the raw plaintext data, the
+  secret decryption key $\mathbf{sk}$, and all final anomaly classification
+  decisions. The client is the only entity that can decrypt any ciphertext.
+
+  \item The \textbf{detection server} holds the public encryption key
+  $\mathbf{pk}$, the relinearization keys $\mathbf{rlk}$ (used to reduce
+  degree-2 ciphertexts after multiplication back to degree-1), and the Galois
+  rotation keys $\mathbf{galk}$ (used for slot vector rotations). The server
+  holds encrypted ciphertexts and performs all HE computation but
+  \textbf{never} holds $\mathbf{sk}$.
+
+  \item No individual data point is ever revealed to the server at any protocol
+  step. The server only computes on ciphertexts.
+
+  \item During the inversion rounds, the client receives only aggregate model
+  parameters: $N$ (the number of training rows) and $\sigma_j^2$ (per-feature
+  variance). These are global statistics over the entire training model 
+  functionally equivalent to the stored parameters of a deployed ML model 
+  not individual data points. Their disclosure does not expose any individual
+  training observation.
+\end{itemize}
+
+\subsection{Three-Process Architecture}
+
+The complete system is implemented as three independent processes:
+
+\textbf{Process 1 --- Detection Server (FastAPI):}
+Receives encrypted ciphertexts from the client via HTTP REST endpoints. Performs
+all HE computation: slot sums, mean computation, variance derivation, PCA
+fitting (in plaintext on the component matrix $\mathbf{V}$), and anomaly score
+computation. Maintains a \texttt{ServerState} object that persists encrypted
+intermediate values (training ciphertexts, computed means, inverse variances,
+test ciphertexts) across multiple HTTP requests. The server holds only
+$\mathbf{pk}$, $\mathbf{rlk}$, and $\mathbf{galk}$ (never $\mathbf{sk}$).
+Score computation runs asynchronously in a background thread to prevent HTTP
+timeout for large test sets.
+
+\textbf{Process 2 --- Data Owner Client (embedded in Dashboard):}
+Encrypts data using $\mathbf{pk}$, participates in inversion rounds (decrypts
+aggregate parameters using $\mathbf{sk}$, computes exact reciprocals in
+plaintext, re-encrypts using $\mathbf{pk}$), receives encrypted score
+ciphertexts from the server, decrypts them using $\mathbf{sk}$, applies the
+anomaly threshold, and computes evaluation metrics. All decryption operations
+occur exclusively on the client.
+
+\textbf{Process 3 --- Monitoring Dashboard (Flask + SocketIO):}
+A live webbased monitoring interface that embeds the client logic, eliminating
+the need for a separate client terminal. Browser buttons communicate via
+SocketIO events to the dashboard backend, which spawns background threads to
+execute client protocol operations. The dashboard displays real time protocol
+progress, per round latency, score distributions, and classification metrics.
+
+\subsection{Complete Module Structure}
+
+\end{spacing}
+\begin{table}[!ht]
+\centering
+\caption{Complete System Modules and Their Responsibilities}
+\label{tab:modules}
+\begin{tabular}{p{5cm}p{8cm}}
+\toprule
+\textbf{Module} & \textbf{Responsibility} \\
+\midrule
+\texttt{key.py} & SEAL context initialization, key generation (pk, sk, rlk, galk), key persistence \\
+\texttt{shared/config.py} & Centralized configuration: network ports, file paths, SEAL parameters, protocol constants \\
+\texttt{shared/protocol.py} & Base64 serialization/deserialization of SEAL ciphertexts for HTTP JSON transport \\
+\texttt{client/encrypt.py} & Column-major training ciphertext creation; row-major test ciphertext creation; scaler application \\
+\texttt{client/decrypt.py} & Scalar single-value decryption; vector multi-value decryption \\
+\texttt{client/invert.py} & Exact $1/x$ computation in plaintext and CKKS re-encryption \\
+\texttt{client/decide.py} & Threshold classification; AUC, F1, Precision, Recall, confusion matrix computation \\
+\texttt{client/http\_client.py} & HTTP client implementing all SAD and PCA protocol rounds over REST \\
+\texttt{server/algo.py} & HE-SAD: slot sums, mean computation, sigma² computation, SAD score computation \\
+\texttt{server/pca\_algo.py} & HE-PCA: slot sums, mean computation, PCA fitting, optimal $k^*$ selection, reconstruction error scoring \\
+\texttt{server/http\_server.py} & FastAPI REST server, ServerState machine, async score computation, results management \\
+\texttt{dashboard/dashboard\_app.py} & Flask + SocketIO dashboard; embedded client controller; browser button event handlers \\
+\texttt{dashboard/templates/dashboard.html} & Live monitoring UI: buttons, progress bar, round status, latency charts, metrics display \\
+\texttt{sad\_baseline.py} & Plaintext SAD reference implementation for performance comparison \\
+\texttt{pca\_baseline.py} & Plaintext PCA reference implementation without StandardScaler \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{spacing}{1.6}
+    
+\end{spacing}
+
+\section{Dataset-Agnostic Preprocessing Pipeline}
+
+\subsection{Design Philosophy}
+
+The preprocessing pipeline converts raw multivariate data from any domain into
+CKKS-compatible normalized form. Three constraints drive the design:
+
+\textbf{CKKS compatibility:} All feature values must lie within $[-1, 1]$ after
+normalization. CKKS encodes plaintext vectors as polynomial coefficients scaled
+by $2^{40}$. Values outside $[-1, 1]$ cause coefficient overflow, and values
+far from zero amplify noise relative to signal. The normalization step is
+therefore not merely a conventional ML preprocessing step but a CKKS correctness
+requirement.
+
+\textbf{Information separation:} All normalization parameters must be computed
+exclusively from normal training data. If min/max values were computed from
+data including attack rows, extreme attack-induced values would expand the
+normalization range, compressing all normal values into a narrow band near zero
+and reducing detection sensitivity. The pipeline enforces strict separation
+between training statistics and test data.
+
+\textbf{Feature type awareness:} Datasets contain heterogeneous feature types
+--- continuous analog sensor readings and discrete binary actuator states. These
+require different normalization strategies to maintain appropriate value ranges
+and to ensure each feature type contributes meaningfully to anomaly scoring.
+
+\subsection{Stage 1: Structural Cleaning}
+
+The first stage removes all metadata columns that carry no sensor signal and
+would corrupt the numeric feature matrix:
+
+\begin{itemize}
+  \item \textbf{Timestamp columns} (\texttt{Timestamp} in SWaT,
+  \texttt{DATETIME} in BATADAL): Date-time strings cannot be meaningfully
+  encoded as real valued features and carry no anomaly discriminating information.
+  \item \textbf{Label columns} (\texttt{Normal/Attack} in SWaT,
+  \texttt{ATT\_FLAG} in BATADAL): Ground truth labels are retained separately
+  for evaluation but excluded from all feature processing, ensuring the system
+  remains unsupervised.
+\end{itemize}
+
+After cleaning, SWaT retains 51 feature columns and BATADAL retains 43,
+consisting purely of numeric sensor and actuator readings.
+
+\subsection{Stage 2: Missing Value Resolution}
+
+The second stage fills gaps in the numeric feature matrix using a three-pass
+imputation strategy:
+
+\textbf{Pass 1 --- Forward fill:} The last valid observation for each feature
+is propagated forward to fill subsequent gaps. This is the physically appropriate
+assumption for time series sensor data: a missing reading most likely reflects
+a sensor reporting its last known state, since physical quantities such as water
+level, pressure, and flow rate change continuously and cannot jump discontinuously.
+
+\textbf{Pass 2 --- Backward fill:} Any gaps remaining at the beginning of the
+recording period (where no prior valid observation exists to propagate forward)
+are resolved by propagating the next valid observation backward.
+
+\textbf{Pass 3 --- Column mean fill:} As a last resort, any gaps persisting
+after both passes are filled with the column mean. In practice, both SWaT and
+BATADAL required only the first two passes, with post resolution verification
+confirming zero remaining missing values.
+
+A programmatic check (\texttt{np.isnan(X).sum() == 0}) confirms successful
+imputation before proceeding.
+
+\subsection{Stage 3: Feature Type Classification}
+
+Each feature is automatically classified as continuous or binary based on its
+observed value distribution in the training data:
+
+\textbf{Continuous features} are real-valued analog sensor readings that vary
+smoothly over time. Examples include:
+\begin{itemize}
+  \item Flow rates (FIT/F\_PU sensors): measure volumetric flow in litres per
+  second, ranging from near-zero to several hundred.
+  \item Water levels (LIT/L\_T sensors): measure absolute level in millimetres
+  or centimetres.
+  \item Pressures (PIT/P\_J sensors): measure differential or absolute pressure
+  in appropriate units.
+\end{itemize}
+
+\textbf{Binary features} are discrete indicators recording the on/off or
+open/closed state of digital actuators. Examples include:
+\begin{itemize}
+  \item Pump on/off signals (P/S\_PU sensors): 0 = off, 1 = on.
+  \item Motorized valve positions (MV/S\_V sensors): 0 = closed, 1 = open.
+\end{itemize}
+
+SWaT contains 26 continuous and 25 binary features; BATADAL contains 28
+continuous and 15 binary features.
+
+\subsection{Stage 4: CKKS-Compatible Normalization}
+
+\subsubsection{Continuous Feature Normalization}
+
+Each continuous feature $x_i$ is linearly scaled to $[-1, 1]$ using the
+minimum and maximum values observed across all \textit{normal} training rows:
+\begin{equation}
+  x'_i = \frac{2(x_i - x_{\min})}{x_{\max} - x_{\min}} - 1
+  \label{eq:normalization}
+\end{equation}
+where $x_{\min}$ and $x_{\max}$ are computed from normal training rows only.
+The scaled value equals $-1$ at the minimum observed normal value, $+1$ at the
+maximum, and $0$ at the midpoint of the normal operating range.
+
+In cases where $x_{\max} = x_{\min}$ (a constant feature), the denominator is
+replaced by $1$ to avoid division by zero, and the feature is assigned value $0$.
+The per-feature $(x_{\min}, x_{\max})$ pairs are serialized to
+\texttt{scaler.npy} for consistent application to test data.
+
+\subsubsection{Binary Feature Normalization}
+
+Binary actuator state features are remapped from their original $\{0, 1\}$
+representation to $\{-1, +1\}$:
+\begin{equation}
+  x'_i = 2x_i - 1
+  \label{eq:binary_norm}
+\end{equation}
+
+Two considerations motivate this remapping:
+
+\textit{Uniform feature space:} Remapping brings binary features into the same
+$[-1, +1]$ value space as normalized continuous features. When all $d$ features
+are packed into a single CKKS ciphertext slot vector, each feature occupies one
+slot. If binary features retained their $\{0, 1\}$ range while continuous
+features span $[-1, 1]$, the binary features would have systematically half the
+magnitude, distorting the anomaly score contributions.
+
+\textit{Symmetric anomaly contribution:} In the SAD score formula, the squared
+deviation of a binary feature from its mean $\mu_j \in (-1, 1)$ is computed.
+With $\{-1, +1\}$ values, both the off-state ($-1$) and the on-state ($+1$)
+contribute nonzero squared deviations from any mean, ensuring that actuator
+state anomalies (an unexpected pump activation or valve closure) register in
+the anomaly score.
+
+\subsection{Stage 5: Output Verification}
+
+Five automated checks guard against silent preprocessing failures:
+\begin{enumerate}
+  \item Zero missing values: \texttt{np.isnan(X).sum() == 0}
+  \item Continuous range: all values within $[-1.01, 1.01]$ (1\% tolerance for
+  floating-point rounding at boundary values)
+  \item Binary value set: each binary column contains only $\{-1, +1\}$
+  \item Row count preservation: output row count equals input row count
+  \item Column count: exactly 51 (SWaT) or 43 (BATADAL) columns
+\end{enumerate}
+
+Both datasets passed all five checks, producing verified output files used as
+direct input to the CKKS encryption pipeline.
+
+\begin{table}[H]
+\centering
+\caption{Preprocessing Pipeline Summary}
+\label{tab:preproc}
+\begin{tabular}{p{0.5cm}p{3.5cm}p{4.5cm}p{4.5cm}}
+\toprule
+\textbf{\#} & \textbf{Stage} & \textbf{SWaT} & \textbf{BATADAL} \\
+\midrule
+1 & Structural Cleaning & Remove Timestamp, Normal/Attack & Remove DATETIME, ATT\_FLAG \\
+2 & Missing Values & Fwd $\to$ Bwd $\to$ Mean fill & Fwd $\to$ Bwd $\to$ Mean fill \\
+3 & Feature Classification & 26 continuous, 25 binary & 28 continuous, 15 binary \\
+4a & Continuous Norm. & Min-max to $[-1,1]$ from normal rows & Min-max to $[-1,1]$ from normal rows \\
+4b & Binary Norm. & $\{0,1\} \to \{-1,+1\}$ & $\{0,1\} \to \{-1,+1\}$ \\
+5 & Verification & 5 checks, all passed & 5 checks, all passed \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{CKKS Encoding Strategies}
+
+Two distinct encoding strategies are used for training data and test data,
+each optimised for the operations performed on them.
+
+\subsection{Column-Major Training Encoding}
+
+Training data is encoded one ciphertext per feature, packing all $N$ training
+row values for that feature into the SIMD slots:
+\begin{equation}
+  \mathrm{ct}_j^{\text{train}} = \mathrm{Enc}_\mathbf{pk}
+  ([x_{0j}, x_{1j}, x_{2j}, \ldots, x_{N-1,j}])
+  \quad \text{for } j = 1, \ldots, d
+  \label{eq:colmajor}
+\end{equation}
+
+This encoding enables the computation of the feature column sum using a
+binary rotation tree: summing $N$ slot values requires only $\lceil\log_2 N
+\rceil$ rotate-and-add steps. For $N = 5000$ training rows, this requires 13
+rotations rather than 4999 sequential additions, reducing noise accumulation
+and computation time by orders of magnitude.
+
+The column sum $\sum_{i=0}^{N-1} x_{ij}$ (present in all slots after the
+rotation tree) is used to compute the feature mean $\mu_j = \frac{1}{N}
+\sum_i x_{ij}$ after division by $N$ via the multi-round protocol.
+
+\subsection{Row-Major Test Encoding}
+
+Test data is encoded one ciphertext per test observation, packing all $d$
+feature values into slots $0$ through $d-1$, with slots $d$ through $n/2-1$
+zero-padded:
+\begin{equation}
+  \mathrm{ct}_i^{\text{test}} = \mathrm{Enc}_\mathbf{pk}
+  ([x_{i0}, x_{i1}, \ldots, x_{i,d-1}, 0, 0, \ldots, 0])
+  \quad \text{for } i = 1, \ldots, N_\text{test}
+  \label{eq:rowmajor}
+\end{equation}
+
+This encoding enables anomaly score computation for observation $i$ in a single
+HE evaluation: subtract the mean vector (sub\_plain), square element-wise
+(square), multiply by the inverse variance vector (mult\_plain), and sum all
+$d$ slot values using $\lceil\log_2 d\rceil$ rotate-and-add steps. For
+$d = 51$ features, only 6 rotations are required.
+
+The zero padding in slots $d$ through $n/2-1$ contributes zero to the slot
+sum, so the anomaly score for the row is correctly accumulated in slot 0 of
+the result ciphertext.
+
+\section{The Encrypted Division Problem}
+
+\subsection{Problem Statement}
+
+The CKKS scheme natively supports ciphertext-ciphertext addition and
+multiplication, and ciphertext-plaintext addition and multiplication. It does
+not natively support division. This limitation is fundamental: division is
+a non-polynomial function and cannot be computed exactly using a finite number
+of multiplications.
+
+Both SAD and PCA require division at critical protocol steps:
+\begin{itemize}
+  \item \textbf{Computing the feature mean:} $\mu_j = \frac{1}{N} \sum_i
+  x_{ij}$ requires dividing the column sum by $N$.
+  \item \textbf{SAD variance normalization:} $s(\mathbf{x}) = \sum_j
+  \frac{(x_j-\mu_j)^2}{\sigma_j^2}$ requires dividing by $\sigma_j^2$ for each
+  of $d = 51$ features.
+\end{itemize}
+
+Without division, these fundamental statistics cannot be computed, and the
+anomaly detection algorithms cannot be faithfully implemented under encryption.
+
+Three approaches to encrypted division were evaluated: Newton-Raphson iterative
+inversion, Chebyshev polynomial approximation, and a novel multi-round
+interactive protocol.
+
+\subsection{Approach 1: Newton-Raphson Iterative Inversion}
+
+The Newton-Raphson method for computing $1/a$ is the iterative formula:
+\begin{equation}
+  y_{n+1} = y_n(2 - a \cdot y_n)
+  \label{eq:nr}
+\end{equation}
+
+Under the convergence condition $|1 - a \cdot y_0| < 1$, this sequence
+converges quadratically to $1/a$ starting from the initial guess $y_0$. Each
+iteration requires two multiplications (computing $a \cdot y_n$ and
+$y_n \cdot (2 - a \cdot y_n)$), consuming 2 HE levels per iteration.
+
+Applied to computing $1/\sigma_j^2$ for all 51 features simultaneously under
+CKKS, the 51 variance values are packed into the 51 slots of a single
+ciphertext, and the iteration runs element wise across all slots simultaneously.
+
+\textbf{Experimental results on SWaT variance values:}
+
+The SWaT training data produces feature variances $\sigma_j^2 \in [0.012,
+0.45]$, spanning a $37\times$ range from smallest to largest. A single initial
+guess $y_0$ must work for all 51 slots simultaneously:
+
+\begin{table}[H]
+\centering
+\caption{Newton-Raphson Convergence on SWaT $\sigma^2 \in [0.012, 0.45]$}
+\label{tab:nr}
+\begin{tabular}{cccc}
+\toprule
+\textbf{Iter.} & \textbf{$y_0 = 4.33$ (1/median)} & \textbf{Mean Error} & \textbf{Status} \\
+\midrule
+0 & Initial guess & 59.8\% & Single guess for all 51 slots \\
+1 & $y_1 = y_0(2-ay_0)$ & 187.2\% & Diverging \\
+2 & $y_2 = y_1(2-ay_1)$ & 941.1\% & Fully diverged \\
+3 & $y_3 = y_2(2-ay_2)$ & 5594.3\% & Unusable \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Root cause of divergence:} The convergence condition requires
+$|1 - a \cdot y_0| < 1$, equivalently $y_0 \in (0, 2/a)$. For a single
+initial guess $y_0 = 4.33$ (the reciprocal of the median variance):
+\begin{itemize}
+  \item For the maximum variance feature ($\sigma^2 = 0.45$): $a \cdot y_0
+  = 0.45 \times 4.33 = 1.95$, giving $|1 - 1.95| = 0.95 < 1$. Convergent
+  but slow.
+  \item For the minimum variance feature ($\sigma^2 = 0.012$): $a \cdot y_0
+  = 0.012 \times 4.33 = 0.052$, giving $|1 - 0.052| = 0.948 < 1$.
+  Technically convergent, but the $37\times$ range means many features
+  are near the boundary of convergence while others diverge under the
+  combined SIMD iteration.
+\end{itemize}
+
+Per slot initial guesses assigning $y_0^{(j)} = 1/\sigma_j^2$ to each slot
+independently  would solve this problem, but CKKS does not support
+slot-selective initial assignments in a way that avoids the underlying
+arithmetic instability when all slots evolve under the same iteration formula.
+
+\textbf{Conclusion:} Newton-Raphson inversion is not viable for encrypted
+division across heterogeneous variance values.
+
+\subsection{Approach 2: Chebyshev Polynomial Approximation}
+
+A degree-$n$ Chebyshev polynomial is fitted offline to approximate $1/x$ on
+the interval $[x_{\min}, x_{\max}]$ using Chebyshev nodes to minimize the
+Runge phenomenon. The polynomial is then evaluated inside the HE computation
+by substituting the ciphertext for $x$.
+
+\begin{table}[H]
+\centering
+\caption{Chebyshev Approximation of $1/x$ on $[0.012, 0.45]$}
+\label{tab:cheb}
+\begin{tabular}{cccl}
+\toprule
+\textbf{Degree} & \textbf{Plaintext Error} & \textbf{HE Levels} & \textbf{HE Status} \\
+\midrule
+3 & 33.3\% & 2--3 & Executed; error unacceptable \\
+5 & 19.1\% & 3--4 & Scale overflow \\
+7 & 8.5\%  & 3--4 & Scale overflow \\
+9 & 5.4\%  & 4--5 & Scale overflow \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Analysis of results:}
+
+At degree 3, the polynomial executes but produces a mean approximation error
+of 33.3\% across the variance range. Substituting $1/\sigma_j^2$ with a value
+33\% in error means the anomaly score for each feature deviates by 33\% from
+the correct normalised squared deviation. This completely destroys the score
+separation between normal and anomalous observations, making degree-3 Chebyshev
+unusable.
+
+At degrees 5, 7, and 9, scale overflow occurs. The root cause: each Chebyshev
+basis polynomial $T_k(x)$ must be evaluated by multiplying the plaintext
+polynomial coefficients with the current ciphertext level. The plaintext was
+encoded at the global scale $2^{40}$, but after several rescaling operations
+the ciphertext operates at a smaller effective scale determined by the remaining
+prime size. Multiplying a plaintext encoded at $2^{40}$ by a ciphertext at a
+reduced scale produces a product with scale far exceeding the current prime
+capacity, causing overflow.
+
+Encoding the plaintext at the ciphertext's current scale (\texttt{ct.scale()}
+rather than the global \texttt{SCALE}) resolves the overflow but reduces the
+polynomial evaluation precision, and degree 3 remains the only depth-feasible
+option, with unacceptable 33.3\% error.
+
+\textbf{Conclusion:} Chebyshev polynomial approximation is not viable for
+encrypted division in this application.
+
+\subsection{Approach 3: Multi-Round Interactive Protocol (Adopted)}
+
+The multi-round interactive protocol resolves the encrypted division problem
+by routing the computation of the reciprocal through the key holding data owner,
+who can perform exact division in plaintext.
+
+The protocol for computing $\mathrm{ct}_{1/a}$ from $\mathrm{ct}_a$ is:
+
+\begin{enumerate}
+  \item The server computes and sends $\mathrm{ct}_a$ to the client.
+  \item The client decrypts using $\mathbf{sk}$: $a = \mathrm{Dec}_\mathbf{sk}
+  (\mathrm{ct}_a)$.
+  \item The client computes the exact reciprocal in plaintext:
+  $r = 1.0 / a$ (IEEE 754 double precision).
+  \item The client encodes $r$ and re-encrypts using $\mathbf{pk}$:
+  $\mathrm{ct}_r = \mathrm{Enc}_\mathbf{pk}(r)$.
+  \item The client sends $\mathrm{ct}_r$ to the server, which continues the
+  protocol using $\mathrm{ct}_r$ in subsequent multiplications.
+\end{enumerate}
+
+\begin{table}[H]
+\centering
+\caption{Comparison of Division Approaches}
+\label{tab:div}
+\begin{tabular}{p{3cm}cccp{3.5cm}}
+\toprule
+\textbf{Method} & \textbf{Error} & \textbf{HE Levels} & \textbf{Works} & \textbf{Limitation} \\
+\midrule
+Newton-Raphson & Diverges & 6 per attempt & No & Wide variance range causes divergence \\
+Chebyshev d=3 & 33.3\% & 2--3 & No & Error too large for anomaly detection \\
+Chebyshev d$\geq$5 & $<$20\% & 3--5 & No & Scale overflow in HE \\
+\textbf{Multi-Round} & \textbf{0\%} & \textbf{0} & \textbf{Yes} & None \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Privacy analysis:} The protocol reveals to the client only the value
+$a$ that was decrypted. In the SAD protocol, this is either:
+\begin{itemize}
+  \item $N = 5000$ (the number of training rows): reveals only the dataset
+  size, which is a public protocol parameter, not a data point.
+  \item $\sigma_j^2$ for $j = 1, \ldots, 51$: the feature variances over the
+  training set. These are global statistics computed over all 5000 training
+  rows, equivalent in sensitivity to the stored parameters of a trained
+  scikit-learn model. They do not reveal any individual training observation
+  or its label.
+\end{itemize}
+
+The protocol introduces two additional communication rounds but adds zero HE
+multiplication levels, preserving the full 5-level budget for the actual anomaly
+scoring computation.
+
+\textbf{Conclusion:} The multi-round interactive protocol achieves exact
+encrypted division with zero approximation error and zero HE depth cost, making
+it the only viable approach for this application.
+
+\end{spacing}
